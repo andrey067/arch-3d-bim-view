@@ -1,0 +1,39 @@
+# Dependencies
+node_modules/
+__pycache__/
+*.pyc
+
+# Build output
+dist/
+build/
+publish/
+bin/
+obj/
+
+# Environment
+.env
+!.env.example
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+*.log
+
+# MinIO data
+minio_data/
+
+# PostgreSQL data
+postgres_data/
+
+# SSL certificates
+nginx/certs/
+*.pem
+*.key
