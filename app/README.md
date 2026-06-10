@@ -1,115 +1,110 @@
-# Arch3DAR — BIM 3D Viewer
+# Arch3DAR
 
-A lightweight, browser-first platform for sharing BIM models. Upload an IFC file, get a shareable link that renders the full 3D model with element-level property inspection and optional AR viewing.
+Arch3DAR is a SaaS that lets architects, interior designers, and custom-furniture
+manufacturers share a single 3D model (uploaded as an `.ifc` file) with their
+client through a public link that the client can open on their phone to view
+the model in 3D and place it in their real environment with augmented reality.
+
+The product is positioned as a 3D sharing platform for architecture, interiors,
+and custom furniture. It is not a BIM platform, not a coordination tool, and
+not an engineering suite.
 
 ## Quick Start
 
 ```bash
-# Clone the repository
 git clone <repository-url>
 cd arch3dar
-
-# Start all services
-docker compose up -d
-
-# Access the application
-# Frontend: http://localhost
-# MinIO Console: http://localhost:9001
-# Backend API: http://localhost/api
+cp app/.env.example app/.env
+docker compose -f app/docker-compose.yml up -d
+docker compose -f app/docker-compose.yml ps
 ```
+
+The backend will apply EF migrations on startup. Open `http://localhost:3000`
+to use the dashboard.
 
 ## Prerequisites
 
-- Docker 20.10+
-- Docker Compose 2.0+
+- Docker 24+ and Docker Compose v2
 - 4 GB RAM minimum (8 GB recommended for large IFC files)
 
 ## Architecture
 
 ```
 ┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   nginx     │────▶│   frontend  │     │   postgres  │
-│   :80/:443  │     │   :3000     │     │   :5432     │
-└─────────────┘     └─────────────┘     └─────────────┘
-       │                                        ▲
-       ▼                                        │
-┌─────────────┐     ┌─────────────┐     ┌─────────────┐
-│   backend   │────▶│    minio    │     │  converter  │
-│   :5000     │     │   :9000     │     │   (worker)  │
-└─────────────┘     └─────────────┘     └─────────────┘
+│  frontend   │     │   backend   │────▶│  postgres   │
+│  :3000      │────▶│   :5000     │     │   :5432     │
+└─────────────┘     └──────┬──────┘     └─────────────┘
+                           │
+                           ▼
+                    ┌─────────────┐     ┌─────────────┐
+                    │  converter  │────▶│    minio    │
+                    │   :8080     │     │   :9000     │
+                    └─────────────┘     └─────────────┘
 ```
+
+- **frontend** — React 18 + Vite + `<model-viewer>`. No BIM components.
+- **backend** — ASP.NET Core 9 API with MediatR, Serilog, EF Core, Identity.
+- **converter** — Python sidecar running IfcOpenShell `IfcConvert`; claims
+  projects via Postgres `FOR UPDATE SKIP LOCKED`.
+- **postgres** — relational state for projects, share links, and Identity.
+- **minio** — S3-compatible object storage with four buckets: `ifc-files`,
+  `glb-files`, `thumbnails`, `qrcodes`.
 
 ## Services
 
-| Service    | Description                          | Port  |
-|------------|--------------------------------------|-------|
-| nginx      | Reverse proxy, SSL termination       | 80, 443 |
-| frontend   | React + Vite BIM viewer              | 3000  |
-| backend    | ASP.NET Core 9 API                   | 5000  |
-| postgres   | PostgreSQL database                  | 5432  |
-| minio      | S3-compatible object storage         | 9000, 9001 |
-| converter  | IFC-to-GLB conversion (IfcConvert)   | —     |
+| Service    | Description                                          | Port          |
+|------------|------------------------------------------------------|---------------|
+| frontend   | React + Vite 3D viewer (no BIM features)             | 3000          |
+| backend    | ASP.NET Core 9 API                                   | 5000 (→ 5001) |
+| postgres   | PostgreSQL 16                                        | 5432          |
+| minio      | S3-compatible object storage                         | 9000, 9001    |
+| converter  | IFC-to-GLB conversion (IfcOpenShell `IfcConvert`)    | 8080          |
 
 ## Environment Variables
 
-Copy `.env.example` to `.env` and configure:
+Copy `app/.env.example` to `app/.env` and adjust as needed. The defaults
+are safe for local development. Never commit `.env` to source control.
 
-```bash
-# PostgreSQL
-POSTGRES_USER=arch3dar
-POSTGRES_PASSWORD=arch3dar_secret
-POSTGRES_DB=arch3dar
+Key variables:
 
-# MinIO
-MINIO_ROOT_USER=minioadmin
-MINIO_ROOT_PASSWORD=minioadmin123
-MINIO_BUCKET_IFC=ifc-files
-MINIO_BUCKET_GLB=glb-files
-MINIO_BUCKET_THUMBNAILS=thumbnails
-```
+- `POSTGRES_*` — Postgres credentials.
+- `MINIO_*` — MinIO root credentials, bucket names, presigned-URL TTL.
+- `PUBLIC_BASE_URL` — the public origin used to build share links and QR
+  codes. The share URL is `${PUBLIC_BASE_URL}/s/{publicToken}`.
+- `MAX_IFC_MB` — maximum upload size in MB. Default `100`.
+- `CONVERSION_TIMEOUT_S` — per-conversion timeout in seconds. Default `300`.
+- `CONVERTER_URL` — the converter sidecar URL. Default
+  `http://converter:8080`.
+- `CORS_ALLOWED_ORIGINS` — semicolon-separated list of allowed origins.
+  Default `http://localhost:3000`.
 
 ## Usage
 
-### Upload an IFC File
+### Create an account
 
-1. Open `http://localhost` in your browser
-2. Click "Upload New"
-3. Drag and drop your `.ifc` file or click to browse
-4. Enter a project name
-5. Click "Upload"
+Open `http://localhost:3000`, click "Create one" on the sign-in page, and
+provide an email + password (≥ 8 chars). After registering, the dashboard
+is reachable.
 
-### View a BIM Model
+### Upload an IFC file
 
-1. Go to the Projects page
-2. Click "View" on any project
-3. Use mouse to orbit, pan, and zoom
-4. Click elements to see their properties
-5. Use the spatial tree to navigate the model
+1. Sign in and click "New project".
+2. Drag and drop your `.ifc` file (or click the dropzone to choose).
+3. Optionally add a description and a client label.
+4. Click "Upload". The project is created and conversion starts automatically.
 
-### View in AR
+### Share with your client
 
-1. Open the share link on a mobile device
-2. Click "View in AR"
-3. Point your camera at a flat surface
-4. The model will appear in augmented reality
+Once the project status reads **Ready to publish**, click "Publish" to
+generate a public link and a QR code. The status moves to **Published**.
 
-## API Endpoints
+### Client opens the link
 
-| Method | Endpoint              | Description                    |
-|--------|-----------------------|--------------------------------|
-| POST   | /api/projects/upload  | Upload IFC file                |
-| GET    | /api/projects         | List all projects              |
-| GET    | /api/projects/{id}    | Get project details            |
-| GET    | /api/share/{id}       | Get share data (public)        |
-| GET    | /health               | Health check                   |
-
-## MinIO Buckets
-
-| Bucket      | Contents              |
-|-------------|-----------------------|
-| ifc-files   | Original IFC uploads  |
-| glb-files   | Converted GLB models  |
-| thumbnails  | Project thumbnails    |
+The client opens the link in a modern mobile or desktop browser. The page
+shows the model name, a thumbnail, and the interactive 3D model with
+orbit / zoom / pan / fullscreen. On Android Chrome (and iOS Safari where
+supported), a "View in your space" button launches the device's native
+AR experience and places the model at real-world scale.
 
 ## Development
 
@@ -118,8 +113,10 @@ MINIO_BUCKET_THUMBNAILS=thumbnails
 ```bash
 cd app/frontend
 npm install
-npm run dev
-# Access at http://localhost:5173
+npm run dev        # http://localhost:5173
+npm run lint
+npm test
+npm run test:e2e   # Playwright (requires full stack via docker compose)
 ```
 
 ### Backend
@@ -127,8 +124,9 @@ npm run dev
 ```bash
 cd app/backend
 dotnet restore
-dotnet run
-# Access at http://localhost:5000
+dotnet build
+dotnet test
+dotnet run         # http://localhost:5000
 ```
 
 ### Converter
@@ -136,50 +134,70 @@ dotnet run
 ```bash
 cd app/converter
 pip install -r requirements.txt
-python3 converter.py
+IFCCONVERT_PATH=$(which IfcConvert) uvicorn converter_service:app --reload
 ```
 
-## Deployment
+### Makefile shortcuts
 
-### Production
+```bash
+make up            # docker compose up -d
+make down          # docker compose down
+make logs          # docker compose logs -f
+make test-backend
+make test-frontend
+make e2e
+make audit-bim     # fails if any "BIM" wording is found in user-facing surfaces
+```
 
-1. Update `.env` with production credentials
-2. Configure SSL certificates in `nginx/nginx.conf`
-3. Update `docker-compose.yml` with your domain
-4. Run `docker compose -f docker-compose.yml up -d`
+## API
 
-### SSL Configuration
+See `specs/001-ifc-mvp-platform/contracts/openapi.md` for the full HTTP
+contract. The high-level surface:
 
-1. Obtain SSL certificates (e.g., Let's Encrypt)
-2. Place certificates in `nginx/certs/`
-3. Uncomment SSL section in `nginx/nginx.conf`
-4. Restart nginx: `docker compose restart nginx`
+- `POST /auth/register` / `POST /auth/login` / `POST /auth/logout`
+- `GET /api/me`
+- `POST /api/projects` (multipart: name, description?, clientLabel?, file)
+- `GET /api/projects`
+- `GET /api/projects/{id}`
+- `POST /api/projects/{id}/publish`
+- `GET /api/share/{token}` (anonymous, public page)
+- `GET /api/share/{token}/qr` (PNG)
+- `GET /health`
+
+## MinIO Buckets
+
+| Bucket      | Contents                | Lifecycle                |
+|-------------|-------------------------|--------------------------|
+| ifc-files   | Original IFC uploads    | Long retention           |
+| glb-files   | Generated 3D models     | Long retention           |
+| thumbnails  | Generated preview PNGs  | Long retention           |
+| qrcodes     | Generated QR code PNGs  | Long retention           |
+
+Public delivery is via presigned GetObject URLs (TTL 10 minutes by default).
+The backend never proxies binary content.
 
 ## Troubleshooting
 
-### Converter not processing files
+### The converter container is unhealthy
 
 ```bash
-# Check converter logs
 docker compose logs converter
-
-# Verify IfcConvert is installed
 docker compose exec converter IfcConvert --version
 ```
 
-### Upload fails with 413
+The container's `IfcConvert` binary is pinned to a specific version and
+SHA256. If the download is broken, update the URLs in
+`app/converter/Dockerfile`.
 
-The nginx `client_max_body_size` is set to 500MB. For larger files, update `nginx/nginx.conf`.
+### Uploads return 413
 
-### Database connection issues
+`MAX_IFC_MB` in `.env` is the ceiling. Increase it (and the Kestrel /
+nginx body-size limit) if your use case requires it.
 
-```bash
-# Check postgres is healthy
-docker compose ps postgres
+### Cross-tenant reads return 404
 
-# View postgres logs
-docker compose logs postgres
-```
+This is intentional. The product hides cross-tenant data existence to
+prevent enumeration (see FR-024 / SC-006 in the spec).
 
 ## License
 

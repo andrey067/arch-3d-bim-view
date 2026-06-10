@@ -1,119 +1,86 @@
-import { useState, useEffect } from 'react';
-import { Link, useParams } from 'react-router-dom';
-import { api, ShareData } from '../api/client';
+import { useEffect, useState } from 'react';
+import { useParams } from 'react-router-dom';
+import axios from 'axios';
+import ModelViewer from '../components/ModelViewer';
+import { api, type PublicShareDto, type ProjectStatus } from '../api/client';
+import { useArCapability } from '../auth/useArCapability';
+
+type State =
+  | { kind: 'loading' }
+  | { kind: 'not-found' }
+  | { kind: 'ready'; data: PublicShareDto };
 
 export default function SharePage() {
-  const { id } = useParams<{ id: string }>();
-  const [shareData, setShareData] = useState<ShareData | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { token = '' } = useParams<{ token: string }>();
+  const [state, setState] = useState<State>({ kind: 'loading' });
+  const arCapable = useArCapability();
+  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
 
   useEffect(() => {
-    if (!id) return;
-
-    const loadShareData = async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        const data = await api.getShareData(id);
-        setShareData(data);
-
-        // Set Open Graph meta tags
-        if (data.projectName) {
-          document.title = `${data.projectName} - Arch3DAR`;
+    let cancelled = false;
+    setState({ kind: 'loading' });
+    api
+      .getPublicShare(token)
+      .then((data) => {
+        if (!cancelled) setState({ kind: 'ready', data });
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        if (axios.isAxiosError(err) && err.response?.status === 404) {
+          setState({ kind: 'not-found' });
+        } else {
+          setState({ kind: 'not-found' });
         }
-
-        const ogTitle = document.querySelector('meta[property="og:title"]') || document.createElement('meta');
-        ogTitle.setAttribute('property', 'og:title');
-        ogTitle.setAttribute('content', data.projectName || 'BIM Project');
-        document.head.appendChild(ogTitle);
-
-        if (data.description) {
-          const ogDescription = document.querySelector('meta[property="og:description"]') || document.createElement('meta');
-          ogDescription.setAttribute('property', 'og:description');
-          ogDescription.setAttribute('content', data.description);
-          document.head.appendChild(ogDescription);
-        }
-
-        if (data.thumbnailUrl) {
-          const ogImage = document.querySelector('meta[property="og:image"]') || document.createElement('meta');
-          ogImage.setAttribute('property', 'og:image');
-          ogImage.setAttribute('content', data.thumbnailUrl);
-          document.head.appendChild(ogImage);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load project');
-      } finally {
-        setLoading(false);
-      }
+      });
+    return () => {
+      cancelled = true;
     };
+  }, [token]);
 
-    loadShareData();
-  }, [id]);
-
-  if (loading) {
+  if (state.kind === 'loading') {
+    return <div className="loading">Loading...</div>;
+  }
+  if (state.kind === 'not-found') {
     return (
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100vh' }}>
-        <div style={{ textAlign: 'center' }}>
-          <div className="skeleton" style={{ width: '200px', height: '200px', borderRadius: '50%', margin: '0 auto 1rem' }} />
-          <div>Loading project...</div>
-        </div>
+      <div className="empty-state">
+        <h1>We couldn&apos;t find that project</h1>
+        <p>The link may be invalid or the project may not be published yet.</p>
       </div>
     );
   }
 
-  if (error) {
-    return (
-      <div className="not-found">
-        <div className="not-found-code">404</div>
-        <div className="not-found-title">Project Not Found</div>
-        <div className="not-found-description">
-          The project you're looking for doesn't exist or has been removed.
-        </div>
-        <Link to="/" className="btn btn-primary">
-          Go to Homepage
-        </Link>
-      </div>
-    );
-  }
+  const { data } = state;
+  const status = data.status as ProjectStatus;
+  const isPublished = status === 'Published';
 
   return (
-    <div className="share-container">
-      <div className="share-header">
-        <h1 className="share-title">{shareData?.projectName}</h1>
-        {shareData?.description && (
-          <p className="share-description">{shareData.description}</p>
-        )}
-        <Link to={`/share/${id}/ar`} className="btn btn-primary">
-          👋 View in AR
-        </Link>
-      </div>
+    <div className="share-page">
+      <header className="share-header">
+        <h1>{data.name}</h1>
+        {data.clientLabel && <p className="muted">for {data.clientLabel}</p>}
+      </header>
 
-      {shareData?.glbUrl && (
-        <div
-          style={{
-            background: 'white',
-            borderRadius: '0.75rem',
-            boxShadow: '0 1px 3px rgba(0, 0, 0, 0.1)',
-            overflow: 'hidden',
-          }}
-        >
-          <div
-            style={{
-              background: '#f8fafc',
-              padding: '3rem',
-              textAlign: 'center',
-              minHeight: '400px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-            }}
-          >
-            <p style={{ color: 'var(--text-secondary)' }}>
-              3D Viewer - Use the View in AR button for augmented reality experience
-            </p>
-          </div>
+      {!isPublished && (
+        <div className="empty-state">
+          <p>This project is not available for viewing yet (status: {status}).</p>
         </div>
+      )}
+
+      {isPublished && (
+        <>
+          <div className="viewer-wrap" data-testid="viewer">
+            <ModelViewer
+              glbUrl={data.glbUrl}
+              thumbnailUrl={data.thumbnailUrl}
+              alt={data.name}
+            />
+          </div>
+          {arCapable && !isHttps && (
+            <div className="banner" role="status">
+              AR requires HTTPS. Use a secure URL to launch AR.
+            </div>
+          )}
+        </>
       )}
     </div>
   );
