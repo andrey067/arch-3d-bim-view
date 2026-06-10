@@ -38,53 +38,6 @@ services:
       retries: 5
       start_period: 10s
 
-  backend:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
-    container_name: arch3dar-backend
-    restart: unless-stopped
-    environment:
-      ASPNETCORE_ENVIRONMENT: "Production"
-      ASPNETCORE_URLS: "http://+:5000"
-      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-arch3dar};Username=${POSTGRES_USER:-arch3dar};Password=${POSTGRES_PASSWORD:-arch3dar_secret}"
-      MinIO__Endpoint: "minio:9000"
-      MinIO__PublicEndpoint: "${MINIO_PUBLIC_ENDPOINT:-192.168.68.55:9000}"
-      MinIO__AccessKey: ${MINIO_ROOT_USER:-minioadmin}
-      MinIO__SecretKey: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      MinIO__UseSSL: "false"
-      MinIO__BucketIfc: ${MINIO_BUCKET_IFC:-ifc-files}
-      MinIO__BucketGlb: ${MINIO_BUCKET_GLB:-glb-files}
-      MinIO__BucketThumbnails: ${MINIO_BUCKET_THUMBNAILS:-thumbnails}
-      MinIO__BucketQrcodes: ${MINIO_BUCKET_QRCODES:-qrcodes}
-      MinIO__PresignTtlSeconds: "${MINIO_PRESIGN_TTL_SECONDS:-600}"
-      PublicBaseUrl: "${PUBLIC_BASE_URL:-http://192.168.68.55:3000}"
-      MaxIfcMb: "${MAX_IFC_MB:-100}"
-      ConversionTimeoutS: "${CONVERSION_TIMEOUT_S:-300}"
-      Converter__Url: "${CONVERTER_URL:-http://converter:8080}"
-      Cors__AllowedOrigins: "${CORS_ALLOWED_ORIGINS:-http://192.168.68.55:3000}"
-    ports:
-      - "5001:5000"
-    depends_on:
-      postgres:
-        condition: service_healthy
-      minio:
-        condition: service_healthy
-
-  frontend:
-    build:
-      context: ./frontend
-      dockerfile: Dockerfile
-      args:
-        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-http://192.168.68.55:5001}"
-    container_name: arch3dar-frontend
-    restart: unless-stopped
-    ports:
-      - "${FRONTEND_PORT:-3000}:3000"
-      - "${FRONTEND_HTTPS_PORT:-443}:443"
-    depends_on:
-      - backend
-
   converter:
     build:
       context: ./converter
@@ -96,18 +49,73 @@ services:
       MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
       MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
       MINIO_USE_SSL: "false"
-      MINIO_BUCKET_IFC: ${MINIO_BUCKET_IFC:-ifc-files}
       MINIO_BUCKET_GLB: ${MINIO_BUCKET_GLB:-glb-files}
       MINIO_BUCKET_THUMBNAILS: ${MINIO_BUCKET_THUMBNAILS:-thumbnails}
-      DATABASE_URL: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-arch3dar};Username=${POSTGRES_USER:-arch3dar};Password=${POSTGRES_PASSWORD:-arch3dar_secret}"
-      CONVERSION_TIMEOUT_S: "${CONVERSION_TIMEOUT_S:-300}"
     ports:
       - "8080:8080"
     depends_on:
       minio:
         condition: service_healthy
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: arch3dar-backend
+    restart: unless-stopped
+    environment:
+      ASPNETCORE_ENVIRONMENT: "Production"
+      ASPNETCORE_URLS: "http://+:5000"
+      ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-arch3dar};Username=${POSTGRES_USER:-arch3dar};Password=${POSTGRES_PASSWORD:-arch3dar_secret}"
+      MinIO__Endpoint: "minio:9000"
+      MinIO__PublicEndpoint: "${MINIO_PUBLIC_ENDPOINT:-192.168.68.51:9000}"
+      MinIO__AccessKey: ${MINIO_ROOT_USER:-minioadmin}
+      MinIO__SecretKey: ${MINIO_ROOT_PASSWORD:-minioadmin123}
+      MinIO__UseSSL: "false"
+      MinIO__BucketIfc: ${MINIO_BUCKET_IFC:-ifc-files}
+      MinIO__BucketGlb: ${MINIO_BUCKET_GLB:-glb-files}
+      MinIO__BucketThumbnails: ${MINIO_BUCKET_THUMBNAILS:-thumbnails}
+      MinIO__PresignTtlSeconds: "${MINIO_PRESIGN_TTL_SECONDS:-3600}"
+      PublicBaseUrl: "${PUBLIC_BASE_URL:-http://192.168.68.51:3100}"
+      MaxIfcMb: "${MAX_IFC_MB:-100}"
+      ConversionTimeoutS: "${CONVERSION_TIMEOUT_S:-120}"
+      Converter__Url: "${CONVERTER_URL:-http://converter:8080}"
+      Cors__AllowedOrigins: "${CORS_ALLOWED_ORIGINS:-http://192.168.68.51:3100}"
+    ports:
+      - "5001:5000"
+    depends_on:
       postgres:
         condition: service_healthy
+      minio:
+        condition: service_healthy
+      converter:
+        condition: service_started
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-https://192.168.68.51}"
+    container_name: arch3dar-frontend
+    restart: unless-stopped
+    expose:
+      - "3000"
+    depends_on:
+      - backend
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    container_name: arch3dar-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - frontend
+      - backend
 
 volumes:
   postgres_data:

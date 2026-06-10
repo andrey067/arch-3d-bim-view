@@ -1,5 +1,5 @@
+using Arch3DAr.Backend.Infrastructure;
 using System.Net.Http.Json;
-using Arch3DAr.Backend.Application.Abstractions;
 
 namespace Arch3DAr.Backend.Infrastructure;
 
@@ -8,7 +8,7 @@ public class ConverterSettings
     public string Url { get; set; } = "http://converter:8080";
 }
 
-public class HttpModelConverter : IModelConverter
+public class HttpModelConverter
 {
     private readonly HttpClient _http;
     private readonly ConverterSettings _settings;
@@ -21,23 +21,30 @@ public class HttpModelConverter : IModelConverter
         _logger = logger;
     }
 
-    public async Task<ConversionResult> ConvertAsync(Guid projectId, CancellationToken ct)
+    public async Task<ConverterResult> ConvertAsync(byte[] ifcBytes, Guid projectId, CancellationToken ct)
     {
-        var resp = await _http.PostAsJsonAsync($"{_settings.Url}/convert",
-            new { projectId }, ct);
+        using var content = new MultipartFormDataContent();
+        var fileContent = new ByteArrayContent(ifcBytes);
+        fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
+        content.Add(fileContent, "file", $"{projectId}.ifc");
+        content.Add(new StringContent(projectId.ToString()), "projectId");
+
+        var resp = await _http.PostAsync($"{_settings.Url}/convert", content, ct);
+        var body = await resp.Content.ReadAsStringAsync(ct);
         if (!resp.IsSuccessStatusCode)
         {
-            var body = await resp.Content.ReadAsStringAsync(ct);
             _logger.LogError("Converter returned {Status}: {Body}", resp.StatusCode, body);
             throw new ConversionException($"Converter returned {(int)resp.StatusCode}: {body}");
         }
         var result = await resp.Content.ReadFromJsonAsync<ConverterResponse>(cancellationToken: ct)
             ?? throw new ConversionException("Converter returned an empty response");
-        return new ConversionResult(result.glbKey, result.thumbnailKey, result.durationMs);
+        return new ConverterResult(result.glbKey, result.usdzKey, result.thumbnailKey, result.durationMs);
     }
 
-    private sealed record ConverterResponse(string glbKey, string thumbnailKey, long durationMs);
+    private sealed record ConverterResponse(string glbKey, string usdzKey, string thumbnailKey, long durationMs);
 }
+
+public record ConverterResult(string GlbKey, string? UsdzKey, string ThumbnailKey, long DurationMs);
 
 public class ConversionException : Exception
 {

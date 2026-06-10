@@ -40,7 +40,6 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 WORKDIR /app
 COPY converter_service.py .
-COPY converter.py .
 
 EXPOSE 8080
 HEALTHCHECK --interval=15s --timeout=3s --start-period=10s --retries=3 \

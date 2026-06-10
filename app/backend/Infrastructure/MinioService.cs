@@ -13,8 +13,7 @@ public class MinioSettings
     public string BucketIfc { get; set; } = "ifc-files";
     public string BucketGlb { get; set; } = "glb-files";
     public string BucketThumbnails { get; set; } = "thumbnails";
-    public string BucketQrcodes { get; set; } = "qrcodes";
-    public int PresignTtlSeconds { get; set; } = 600;
+    public int PresignTtlSeconds { get; set; } = 3600;
 }
 
 public class MinioService
@@ -39,13 +38,7 @@ public class MinioService
 
     public async Task EnsureBucketsAsync(CancellationToken ct = default)
     {
-        foreach (var bucket in new[]
-                 {
-                     _settings.BucketIfc,
-                     _settings.BucketGlb,
-                     _settings.BucketThumbnails,
-                     _settings.BucketQrcodes,
-                 })
+        foreach (var bucket in new[] { _settings.BucketIfc, _settings.BucketGlb, _settings.BucketThumbnails })
         {
             var exists = await _client.BucketExistsAsync(new BucketExistsArgs().WithBucket(bucket), ct);
             if (!exists)
@@ -56,41 +49,36 @@ public class MinioService
         }
     }
 
-    public async Task UploadStreamAsync(string bucket, string key, Stream content, string contentType, CancellationToken ct = default)
+    public async Task UploadBytesAsync(string bucket, string key, byte[] data, string contentType, CancellationToken ct = default)
     {
+        using var ms = new MemoryStream(data);
         await _client.PutObjectAsync(new PutObjectArgs()
             .WithBucket(bucket)
             .WithObject(key)
-            .WithStreamData(content)
-            .WithObjectSize(content.Length - content.Position)
+            .WithStreamData(ms)
+            .WithObjectSize(data.Length)
             .WithContentType(contentType), ct);
-    }
-
-    public async Task<byte[]> DownloadAsync(string bucket, string key, CancellationToken ct = default)
-    {
-        using var ms = new MemoryStream();
-        await _client.GetObjectAsync(new GetObjectArgs()
-            .WithBucket(bucket)
-            .WithObject(key)
-            .WithCallbackStream(stream => stream.CopyTo(ms)), ct);
-        return ms.ToArray();
     }
 
     public async Task<string> GetPresignedUrlAsync(string bucket, string key, CancellationToken ct = default)
     {
+        // For query-string presigned URLs, AWS SigV4 includes the Host header in the
+        // canonical request. If we sign with one host and the browser sends a different
+        // one, MinIO rejects it with SignatureDoesNotMatch.
+        //
+        // nginx now terminates TLS and proxies to MinIO on HTTPS (port 443).
+        // We create a signing client with the public endpoint + SSL=true so the
+        // signature matches what the browser will send.
+        var host = _settings.PublicEndpoint.Split(':')[0];
+        using var signingClient = new MinioClient()
+            .WithEndpoint(host)
+            .WithCredentials(_settings.AccessKey, _settings.SecretKey)
+            .WithSSL(true)
+            .Build();
         var args = new PresignedGetObjectArgs()
             .WithBucket(bucket)
             .WithObject(key)
             .WithExpiry(_settings.PresignTtlSeconds);
-        var url = await _client.PresignedGetObjectAsync(args);
-        if (!string.IsNullOrEmpty(_settings.PublicEndpoint))
-        {
-            var uri = new UriBuilder(url);
-            uri.Scheme = "https";
-            uri.Host = _settings.PublicEndpoint.Split(':')[0];
-            uri.Port = -1;
-            url = uri.ToString();
-        }
-        return url;
+        return await signingClient.PresignedGetObjectAsync(args);
     }
 }

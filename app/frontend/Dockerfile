@@ -3,11 +3,12 @@ WORKDIR /app
 COPY package.json package-lock.json* ./
 RUN npm install --legacy-peer-deps
 COPY . .
+ARG VITE_API_BASE_URL=http://192.168.68.51:5001
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
 RUN npm run build
 
 FROM nginx:alpine
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx-https.conf /etc/nginx/conf.d/default.conf
-COPY 192.168.68.51.pem 192.168.68.51-key.pem /etc/nginx/certs/
-EXPOSE 3000 443
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+EXPOSE 3000
 CMD ["nginx", "-g", "daemon off;"]
