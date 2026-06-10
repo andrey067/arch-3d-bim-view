@@ -1,6 +1,25 @@
 <!--
   Sync Impact Report:
   ==================
+  Version change: 1.0.0 → 1.1.0 (MINOR: new "Route Boundary" section)
+  
+  Modified principles:
+  - (none)
+  
+  Added sections:
+  - "Route Boundary: Admin vs. Public Share" — codifies that
+    @google/model-viewer, ModelViewer, useArCapability, and the
+    <model-viewer> element are forbidden in admin routes. Enforced
+    by app/frontend/src/__tests__/adminBoundary.test.ts.
+  
+  Removed sections: (none)
+  
+  Templates requiring updates: (none)
+  
+  Follow-up TODOs: (none)
+
+  ----
+
   Version change: 0.0.0 → 1.0.0 (MAJOR: first substantive constitution from template)
   
   Modified principles:
@@ -120,6 +139,31 @@ app/
    plan identifies a complexity violation, the PR MUST include a documented
    justification explaining why a simpler approach is insufficient.
 
+## Route Boundary: Admin vs. Public Share
+
+The frontend is a single SPA, but the URL is divided into two routes
+with non-overlapping responsibilities:
+
+- **Admin routes** (`/`, `/upload`, `/projects/:id`, `*`) — list, upload,
+  detail, publish, share dialog. No 3D model rendering, no AR, no
+  `model-viewer` code, no mobile UA sniffing.
+- **Public share route** (`/s/:token`) — the only place that renders
+  `ModelViewer`, imports `@google/model-viewer`, and detects AR capability
+  for the HTTPS banner.
+
+Admin pages (`DashboardPage`, `ProjectDetailPage`, `UploadPage`,
+`NotFoundPage`, and any future admin page) MUST NOT import:
+
+- `../components/ModelViewer`
+- `../auth/useArCapability`
+- `@google/model-viewer`
+- the `<model-viewer>` JSX element
+
+A static-import canary test in
+`app/frontend/src/__tests__/adminBoundary.test.ts` enforces this boundary
+in CI. Regressions MUST be fixed by removing the offending import from
+the admin side, not by relaxing the test.
+
 ## Governance
 
 This Constitution is the governing document for all development practices,
@@ -147,4 +191,10 @@ Every `/speckit-plan` execution MUST include a Constitution Check step.
 Violations MUST be documented in the Complexity Tracking section of the plan.
 Persistent or severe violations MAY block implementation until resolved.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-09 | **Last Amended**: 2026-06-09
+**Version**: 1.1.0 | **Ratified**: 2026-06-09 | **Last Amended**: 2026-06-10
+
+### 1.1.0 Amendment Notes
+
+- Added "Route Boundary: Admin vs. Public Share" section codifying that
+  `@google/model-viewer`, `ModelViewer`, and `useArCapability` MUST NOT
+  appear in any admin route. Backed by a static canary test.
