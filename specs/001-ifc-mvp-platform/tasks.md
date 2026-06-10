@@ -332,6 +332,31 @@ With three developers:
 
 ---
 
+## Phase 9: Bundle Hygiene & Route Boundary (Post-MVP Hardening)
+
+**Purpose**: Codify and guard the route boundary between admin and public share pages. The single SPA correctly lazy-loads `SharePage` so `@google/model-viewer` is excluded from the admin entry chunk, but no test guarded this — a future regression (e.g. someone importing `ModelViewer` from a `ProjectDetailPage` panel) would re-leak ~hundreds of KB of unused JS to dashboard users and quietly violate the MVP's "admin is for management, not viewing" rule. This phase adds a static-import canary and a constitution clause that together make the boundary enforceable in CI.
+
+**Origin**: User refactor request, 2026-06-10. Two of the original five claims (admin importing `ModelViewer`, `glbPresignedUrl = thumbnailUrl`) were already false in code; the real issue was bundle hygiene and the absence of a regression guard. Pipeline work (IFC→GLB and GLB→USDZ) is out of scope and tracked separately.
+
+- [X] T102 [P] Create static-import canary test in `app/frontend/src/__tests__/adminBoundary.test.ts`: uses Vite's `import.meta.glob('../pages/*.tsx', { query: '?raw', import: 'default', eager: true })` to read each admin page source as a string at test time; asserts none of `DashboardPage.tsx`, `ProjectDetailPage.tsx`, `UploadPage.tsx`, `NotFoundPage.tsx` contain any of these patterns: `from '../components/ModelViewer'`, `from '../auth/useArCapability'`, `from '@google/model-viewer'`, `<model-viewer`. Uses `it.each(ADMIN_FILES)` for one assertion per file. No new npm dependencies.
+- [X] T103 Amend `.specify/memory/constitution.md` from v1.0.0 → v1.1.0 (MINOR: new section, no principle removals). Added section "Route Boundary: Admin vs. Public Share" enumerating the forbidden imports, listing the four admin page files, and pointing at `adminBoundary.test.ts` as the enforcement mechanism. Bumped version, last-amended date, sync-impact report, and amendment log per the constitution's own governance procedure (constitution §Governance → §Versioning Policy).
+- [X] T104 [P] Verify the bundle boundary holds: run `npm run build` in `app/frontend/`, then `rg -l 'model-viewer|@google' app/frontend/dist/assets/` — assert only `SharePage-*.js` matches and no admin chunk (`DashboardPage-*.js`, `ProjectDetailPage-*.js`, `UploadPage-*.js`, `NotFoundPage-*.js`, `index-*.js`) contains `model-viewer` strings. Run `npm test` to confirm the canary passes (5 files, 14 tests including the 4 new admin-boundary cases). Run `npx tsc --noEmit` and `npm run lint` — both clean.
+- [ ] T105 Commit the refactor: stage `.specify/memory/constitution.md` and `app/frontend/src/__tests__/adminBoundary.test.ts` with a message such as `chore(frontend): guard admin/share route boundary with static canary + constitution v1.1.0`. Reference this Phase 9 in the body. Do **not** run this task without explicit user authorization per the AGENTS rule on commits.
+
+**Out of scope (filed separately)**:
+- IFC → GLB pipeline reliability on `app/converter/converter_service.py` (no `IfcConvert` shim issues observed, but no end-to-end IFC round-trip has been run against a real `.ifc` file in CI)
+- GLB → USDZ companion generation for iOS Quick Look (already marked optional/non-MVP in T065)
+- Splitting the SPA into two Vite apps (`app/admin/` + `app/share/`) — explicitly rejected as over-engineering relative to the route-lazy split; would also conflict with ADR-001
+
+**Verification**:
+- `npm run lint` → clean
+- `npx tsc --noEmit` → clean
+- `npm test` → 5 files, 14/14 tests pass (4 new admin-boundary cases via `it.each`)
+- `npm run build` → 9 chunks, 555 ms, `model-viewer` only in `dist/assets/SharePage-BPSe2AGb.js`
+- `rg -l 'model-viewer|@google' app/frontend/dist/assets/` → exactly one file: `SharePage-BPSe2AGb.js`
+
+---
+
 ## Notes
 
 - `[P]` tasks touch different files and have no intra-phase dependencies. Tasks without `[P]` either depend on earlier tasks in the same phase or are the integration point that wires parallel work together.
