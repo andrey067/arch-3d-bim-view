@@ -127,13 +127,13 @@ app/
 │   ├── src/
 │   │   ├── pages/
 │   │   │   ├── DashboardPage.tsx       # list + status
-│   │   │   ├── ProjectDetailPage.tsx   # status + publish action
+│   │   │   ├── ProjectDetailPage.tsx   # status + thumbnail + publish action (no viewer)
 │   │   │   ├── UploadPage.tsx          # drag-drop + form
-│   │   │   ├── SharePage.tsx           # public page with <model-viewer>
+│   │   │   ├── SharePage.tsx           # public page with <model-viewer> + AR
 │   │   │   ├── LoginPage.tsx
 │   │   │   └── NotFoundPage.tsx
 │   │   ├── components/
-│   │   │   ├── ModelViewer.tsx         # <model-viewer> wrapper
+│   │   │   ├── ModelViewer.tsx         # <model-viewer> wrapper (used only by SharePage)
 │   │   │   ├── StatusBadge.tsx
 │   │   │   ├── ShareDialog.tsx         # QR + copy-to-clipboard
 │   │   │   └── DropZone.tsx
