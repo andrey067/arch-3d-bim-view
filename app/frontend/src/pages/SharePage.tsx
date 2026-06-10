@@ -6,9 +6,10 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 
 interface ShareData {
   name: string;
-  glbUrl: string;
+  status: string;
+  glbUrl: string | null;
   usdzUrl: string | null;
-  thumbnailUrl: string;
+  thumbnailUrl: string | null;
 }
 
 type State =
@@ -16,8 +17,6 @@ type State =
   | { kind: 'not-found' }
   | { kind: 'ready'; data: ShareData };
 
-// The <model-viewer> custom element is registered by the import above.
-// We treat it as a generic HTMLElement to keep TypeScript happy.
 type ModelViewerElement = HTMLElement & {
   activateAR?: () => Promise<void>;
 };
@@ -25,7 +24,7 @@ type ModelViewerElement = HTMLElement & {
 export default function SharePage() {
   const { token = '' } = useParams<{ token: string }>();
   const [state, setState] = useState<State>({ kind: 'loading' });
-  const [arStatus, setArStatus] = useState<string>('idle');
+  const [arStatus, setArStatus] = useState<string>('not-presenting');
   const modelRef = useRef<ModelViewerElement | null>(null);
 
   useEffect(() => {
@@ -68,6 +67,7 @@ export default function SharePage() {
 
   const { data } = state;
   const isHttps = window.location.protocol === 'https:';
+  const arAvailable = Boolean(data.usdzUrl && data.glbUrl);
 
   return (
     <div className="container">
@@ -76,32 +76,41 @@ export default function SharePage() {
         Drag to orbit · scroll to zoom · on a phone, tap “View in your space” to launch AR
       </p>
 
-      <div className="model-frame">
-        {/* @ts-expect-error custom element */}
-        <model-viewer
-          ref={modelRef}
-          src={data.glbUrl}
-          ios-src={data.usdzUrl ?? ''}
-          poster={data.thumbnailUrl}
-          alt={data.name}
-          camera-controls=""
-          touch-action="pan-y"
-          shadow-intensity="1"
-          exposure="1"
-          ar=""
-          ar-modes="quick-look scene-viewer webxr"
-          ar-status="not-presenting"
-          style={{ width: '100%', height: '100%', backgroundColor: '#f0f0f0', display: 'block' }}
-          onArStatus={(e: Event) => {
-            const detail = (e as CustomEvent<{ status: string }>).detail;
-            setArStatus(detail.status);
-          }}
-        />
-      </div>
+      {data.status !== 'Ready' || !data.glbUrl ? (
+        <div className="banner" role="status">
+          Model is still processing. Refresh in a moment.
+        </div>
+      ) : (
+        <div className="model-frame">
+          {/* @ts-expect-error custom element */}
+          <model-viewer
+            ref={modelRef}
+            src={data.glbUrl}
+            ios-src={data.usdzUrl ?? undefined}
+            poster={data.thumbnailUrl ?? undefined}
+            alt={data.name}
+            camera-controls=""
+            touch-action="pan-y"
+            shadow-intensity="1"
+            exposure="1"
+            auto-rotate=""
+            ar={arAvailable ? '' : undefined}
+            ar-modes="quick-look scene-viewer webxr"
+            ar-status="not-presenting"
+            style={{ width: '100%', height: '100%', backgroundColor: '#f0f0f0', display: 'block' }}
+            onArStatus={(e: Event) => {
+              const detail = (e as CustomEvent<{ status: string }>).detail;
+              setArStatus(detail.status);
+            }}
+          />
+        </div>
+      )}
 
-      <p className="muted" style={{ marginTop: 8 }}>
-        AR status: {arStatus}
-      </p>
+      {arAvailable && (
+        <p className="muted" style={{ marginTop: 8 }}>
+          AR status: {arStatus}
+        </p>
+      )}
 
       {!isHttps && (
         <div className="banner" role="status">
@@ -109,9 +118,15 @@ export default function SharePage() {
         </div>
       )}
 
-      {arStatus === 'unsupported' && (
+      {arAvailable && arStatus === 'failed' && (
         <div className="banner" role="status">
-          This device/browser does not support AR. The 3D viewer above still works.
+          AR could not start. Ensure you are on HTTPS and the USDZ file loaded correctly.
+        </div>
+      )}
+
+      {!arAvailable && data.status === 'Ready' && (
+        <div className="banner" role="status">
+          AR is unavailable for this model. The 3D viewer above still works.
         </div>
       )}
     </div>

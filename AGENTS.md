@@ -3,9 +3,11 @@ For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at:
 `specs/001-ifc-mvp-platform/plan.md`
 
+**Active correction (2026-06-10)**: iPhone Quick Look AR fix — remove MinIO, local `/data` storage, mandatory USDZ via `usd_from_gltf`, direct file serving without redirects. See plan.md **Correction Scope**.
+
 Supporting artifacts (read in this order when implementing a task):
-- `specs/001-ifc-mvp-platform/spec.md` — WHAT and WHY (33 functional requirements, 5 user stories, success criteria)
-- `specs/001-ifc-mvp-platform/research.md` — 10 technology decisions, each with rationale and alternatives
+- `specs/001-ifc-mvp-platform/spec.md` — original WHAT/WHY (partially superseded by correction scope in plan.md)
+- `specs/001-ifc-mvp-platform/research.md` — technology decisions (R-11…R-17 for correction; earlier R-01…R-10 where not superseded)
 - `specs/001-ifc-mvp-platform/data-model.md` — entities, validation rules, state machine
 - `specs/001-ifc-mvp-platform/contracts/openapi.md` — HTTP API contract (frontend + converter sidecar)
 - `specs/001-ifc-mvp-platform/quickstart.md` — end-to-end validation scenarios

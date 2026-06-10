@@ -1,4 +1,4 @@
-.PHONY: up down logs restart ps build-backend build-frontend test-backend test-frontend e2e audit-bim clean
+.PHONY: up down logs restart ps build-backend build-frontend build-converter test-backend test-frontend verify-no-minio audit-bim clean
 
 COMPOSE := docker compose -f app/docker-compose.yml
 
@@ -23,18 +23,19 @@ build-backend:
 build-frontend:
 	cd app/frontend && npm run build
 
+build-converter:
+	$(COMPOSE) build converter
+
+verify-no-minio:
+	@! grep -riE '\bminio\b|\bMinIO\b' app/ --include='*.yml' --include='*.cs' --include='*.py' --include='.env.example' 2>/dev/null || (echo "MinIO references still present" && exit 1)
+	@echo "OK: no MinIO references in app/"
+
 test-backend:
 	cd app/tests/backend && dotnet test
 
 test-frontend:
 	cd app/frontend && npx vitest run
 
-e2e:
-	cd app/frontend && npx playwright test
-
-# FR-031 / SC-008: zero "BIM platform/collaboration/coordination/metadata/management/engineering"
-# mentions in user-facing surfaces. Negation contexts ("not a BIM platform", "is not a
-# coordination tool") are allowed because they are explicitly disclaiming the term.
 audit-bim:
 	@bash -c 'set -e; \
 	  hits=$$(grep -rEi "BIM (platform|collaboration|coordination|metadata|management|engineering)" \

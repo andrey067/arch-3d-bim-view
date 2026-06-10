@@ -18,26 +18,6 @@ services:
       retries: 5
       start_period: 10s
 
-  minio:
-    image: minio/minio:RELEASE.2024-10-29T16-01-48Z
-    container_name: arch3dar-minio
-    restart: unless-stopped
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-    ports:
-      - "9000:9000"
-      - "9001:9001"
-    volumes:
-      - minio_data:/data
-    command: server /data --console-address ":9001"
-    healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
   converter:
     build:
       context: ./converter
@@ -45,17 +25,14 @@ services:
     container_name: arch3dar-converter
     restart: unless-stopped
     environment:
-      MINIO_ENDPOINT: "minio:9000"
-      MINIO_ACCESS_KEY: ${MINIO_ROOT_USER:-minioadmin}
-      MINIO_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      MINIO_USE_SSL: "false"
-      MINIO_BUCKET_GLB: ${MINIO_BUCKET_GLB:-glb-files}
-      MINIO_BUCKET_THUMBNAILS: ${MINIO_BUCKET_THUMBNAILS:-thumbnails}
+      DATA_ROOT: /data
+      IFCCONVERT_PATH: /usr/local/bin/IfcConvert
+      USD_FROM_GLTF_PATH: /usr/local/bin/usd_from_gltf
+      CONVERSION_TIMEOUT_S: "${CONVERSION_TIMEOUT_S:-120}"
     ports:
       - "8080:8080"
-    depends_on:
-      minio:
-        condition: service_healthy
+    volumes:
+      - project_data:/data
 
   backend:
     build:
@@ -67,26 +44,18 @@ services:
       ASPNETCORE_ENVIRONMENT: "Production"
       ASPNETCORE_URLS: "http://+:5000"
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-arch3dar};Username=${POSTGRES_USER:-arch3dar};Password=${POSTGRES_PASSWORD:-arch3dar_secret}"
-      MinIO__Endpoint: "minio:9000"
-      MinIO__PublicEndpoint: "${MINIO_PUBLIC_ENDPOINT:-192.168.68.51:9000}"
-      MinIO__AccessKey: ${MINIO_ROOT_USER:-minioadmin}
-      MinIO__SecretKey: ${MINIO_ROOT_PASSWORD:-minioadmin123}
-      MinIO__UseSSL: "false"
-      MinIO__BucketIfc: ${MINIO_BUCKET_IFC:-ifc-files}
-      MinIO__BucketGlb: ${MINIO_BUCKET_GLB:-glb-files}
-      MinIO__BucketThumbnails: ${MINIO_BUCKET_THUMBNAILS:-thumbnails}
-      MinIO__PresignTtlSeconds: "${MINIO_PRESIGN_TTL_SECONDS:-3600}"
-      PublicBaseUrl: "${PUBLIC_BASE_URL:-http://192.168.68.51:3100}"
+      DATA_ROOT: /data
+      PublicBaseUrl: "${PUBLIC_BASE_URL:-https://localhost}"
       MaxIfcMb: "${MAX_IFC_MB:-100}"
       ConversionTimeoutS: "${CONVERSION_TIMEOUT_S:-120}"
       Converter__Url: "${CONVERTER_URL:-http://converter:8080}"
-      Cors__AllowedOrigins: "${CORS_ALLOWED_ORIGINS:-http://192.168.68.51:3100}"
+      Cors__AllowedOrigins: "${CORS_ALLOWED_ORIGINS:-https://localhost}"
     ports:
       - "5001:5000"
+    volumes:
+      - project_data:/data
     depends_on:
       postgres:
-        condition: service_healthy
-      minio:
         condition: service_healthy
       converter:
         condition: service_started
@@ -96,7 +65,7 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
       args:
-        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-https://192.168.68.51}"
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-https://localhost}"
     container_name: arch3dar-frontend
     restart: unless-stopped
     expose:
@@ -120,5 +89,5 @@ services:
 volumes:
   postgres_data:
     name: arch3dar_postgres_data
-  minio_data:
-    name: arch3dar_minio_data
+  project_data:
+    name: arch3dar_project_data

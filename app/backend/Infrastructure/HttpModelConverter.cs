@@ -1,4 +1,3 @@
-using Arch3DAr.Backend.Infrastructure;
 using System.Net.Http.Json;
 
 namespace Arch3DAr.Backend.Infrastructure;
@@ -36,15 +35,16 @@ public class HttpModelConverter
             _logger.LogError("Converter returned {Status}: {Body}", resp.StatusCode, body);
             throw new ConversionException($"Converter returned {(int)resp.StatusCode}: {body}");
         }
+
         var result = await resp.Content.ReadFromJsonAsync<ConverterResponse>(cancellationToken: ct)
             ?? throw new ConversionException("Converter returned an empty response");
-        return new ConverterResult(result.glbKey, result.usdzKey, result.thumbnailKey, result.durationMs);
+        return new ConverterResult(result.glbPath, result.usdzPath, result.thumbnailPath, result.durationMs);
     }
 
-    private sealed record ConverterResponse(string glbKey, string usdzKey, string thumbnailKey, long durationMs);
+    private sealed record ConverterResponse(string glbPath, string usdzPath, string thumbnailPath, long durationMs);
 }
 
-public record ConverterResult(string GlbKey, string? UsdzKey, string ThumbnailKey, long DurationMs);
+public record ConverterResult(string GlbPath, string UsdzPath, string ThumbnailPath, long DurationMs);
 
 public class ConversionException : Exception
 {

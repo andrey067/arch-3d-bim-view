@@ -3,7 +3,6 @@ using Arch3DAr.Backend.Domain;
 using Arch3DAr.Backend.Infrastructure;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
-using Minio;
 using Serilog;
 using Serilog.Formatting.Compact;
 
@@ -17,17 +16,9 @@ Log.Logger = new LoggerConfiguration()
     .CreateLogger();
 builder.Host.UseSerilog();
 
-var minioSettings = new MinioSettings
+var storageSettings = new LocalFileStorageSettings
 {
-    Endpoint = builder.Configuration["MinIO:Endpoint"] ?? "minio:9000",
-    PublicEndpoint = builder.Configuration["MinIO:PublicEndpoint"] ?? "localhost:9000",
-    AccessKey = builder.Configuration["MinIO:AccessKey"] ?? "minioadmin",
-    SecretKey = builder.Configuration["MinIO:SecretKey"] ?? "minioadmin123",
-    UseSsl = bool.TryParse(builder.Configuration["MinIO:UseSSL"], out var ssl) && ssl,
-    BucketIfc = builder.Configuration["MinIO:BucketIfc"] ?? "ifc-files",
-    BucketGlb = builder.Configuration["MinIO:BucketGlb"] ?? "glb-files",
-    BucketThumbnails = builder.Configuration["MinIO:BucketThumbnails"] ?? "thumbnails",
-    PresignTtlSeconds = int.TryParse(builder.Configuration["MinIO:PresignTtlSeconds"], out var ttl) ? ttl : 3600,
+    DataRoot = builder.Configuration["DATA_ROOT"] ?? "/data",
 };
 
 var converterSettings = new ConverterSettings
@@ -35,29 +26,35 @@ var converterSettings = new ConverterSettings
     Url = builder.Configuration["Converter:Url"] ?? "http://converter:8080",
 };
 
-var publicBaseUrl = (builder.Configuration["PublicBaseUrl"] ?? "http://localhost:3100").TrimEnd('/');
+var publicBaseUrl = (builder.Configuration["PublicBaseUrl"] ?? "https://localhost").TrimEnd('/');
 var maxIfcMb = int.TryParse(builder.Configuration["MaxIfcMb"], out var mb) ? mb : 100;
 var maxIfcBytes = (long)maxIfcMb * 1024L * 1024L;
-var allowedOrigins = (builder.Configuration["Cors:AllowedOrigins"] ?? "http://localhost:3100")
+var allowedOrigins = (builder.Configuration["Cors:AllowedOrigins"] ?? "https://localhost")
     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
-builder.Services.AddSingleton(minioSettings);
+builder.Services.AddSingleton(storageSettings);
 builder.Services.AddSingleton(converterSettings);
-builder.Services.AddSingleton<IMinioClient>(_ => MinioService.BuildClient(minioSettings));
-builder.Services.AddScoped<MinioService>();
+builder.Services.AddSingleton<LocalFileStorage>();
 builder.Services.AddSingleton<QrCodeService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<HttpModelConverter>();
 
-builder.Services.AddDbContext<AppDbContext>(opts =>
-    opts.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
-       .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+if (builder.Environment.IsEnvironment("Testing"))
+{
+    builder.Services.AddDbContext<AppDbContext>(opts =>
+        opts.UseInMemoryDatabase("arch3dar-tests"));
+}
+else
+{
+    builder.Services.AddDbContext<AppDbContext>(opts =>
+        opts.UseNpgsql(builder.Configuration.GetConnectionString("DefaultConnection"))
+           .ConfigureWarnings(w => w.Ignore(Microsoft.EntityFrameworkCore.Diagnostics.RelationalEventId.PendingModelChangesWarning)));
+}
 
 builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
     p.WithOrigins(allowedOrigins)
      .AllowAnyHeader()
-     .AllowAnyMethod()
-     .AllowCredentials()));
+     .AllowAnyMethod()));
 
 builder.Services.Configure<FormOptions>(o =>
 {
@@ -78,6 +75,7 @@ builder.WebHost.ConfigureKestrel(o =>
 var app = builder.Build();
 
 app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseMiddleware<ModelContentTypeMiddleware>();
 app.UseSerilogRequestLogging();
 app.UseCors();
 
@@ -114,8 +112,6 @@ using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
     await db.Database.EnsureCreatedAsync();
-    var minio = scope.ServiceProvider.GetRequiredService<MinioService>();
-    await minio.EnsureBucketsAsync();
 }
 
 string NewToken()
@@ -125,15 +121,36 @@ string NewToken()
     return Convert.ToHexString(bytes).ToLowerInvariant();
 }
 
+string FileUrl(Guid projectId, string fileName) =>
+    $"{publicBaseUrl}/files/{projectId}/{fileName}";
+
+IResult ServeProjectFile(Guid projectId, string fileName, LocalFileStorage storage)
+{
+    var path = storage.ResolvePath(projectId, fileName);
+    if (!storage.IsInsideDataRoot(path) || !File.Exists(path))
+    {
+        return Results.NotFound();
+    }
+
+    var contentType = fileName switch
+    {
+        LocalFileStorage.GlbFileName => "model/gltf-binary",
+        LocalFileStorage.UsdzFileName => "model/vnd.usdz+zip",
+        LocalFileStorage.ThumbnailFileName => "image/png",
+        _ => "application/octet-stream",
+    };
+
+    return Results.File(path, contentType, enableRangeProcessing: fileName == LocalFileStorage.GlbFileName);
+}
+
 // GET /health
 app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 
-// POST /upload  (multipart, single .ifc; field name "file", optional "name")
+// POST /upload
 app.MapPost("/upload", async (
     HttpContext http,
     AppDbContext db,
-    MinioService minio,
-    MinioSettings minioSettings,
+    LocalFileStorage storage,
     HttpModelConverter converter,
     QrCodeService qr,
     ILogger<Program> logger,
@@ -160,7 +177,6 @@ app.MapPost("/upload", async (
         return Results.Problem(statusCode: 415, title: "Invalid IFC", detail: "Only .ifc files are accepted.");
     }
 
-    // Read first line and check IFC signature
     byte[] head;
     await using (var s = file.OpenReadStream())
     {
@@ -179,7 +195,7 @@ app.MapPost("/upload", async (
 
     var projectId = Guid.NewGuid();
     var publicToken = NewToken();
-    var ifcKey = $"projects/{projectId}/source.ifc";
+    var now = DateTimeOffset.UtcNow;
 
     byte[] ifcBytes;
     await using (var s = file.OpenReadStream())
@@ -188,17 +204,28 @@ app.MapPost("/upload", async (
         await s.CopyToAsync(ms, ct);
         ifcBytes = ms.ToArray();
     }
-    await minio.UploadBytesAsync(minioSettings.BucketIfc, ifcKey, ifcBytes, "application/octet-stream", ct);
 
-    var now = DateTimeOffset.UtcNow;
-    var project = Project.Create(publicToken, name, ifcKey, ifcBytes.Length, now);
+    storage.EnsureProjectDir(projectId);
+    await storage.WriteFileAsync(projectId, LocalFileStorage.IfcFileName, ifcBytes, ct);
+
+    var project = Project.Create(projectId, publicToken, name, ifcBytes.Length, now);
     db.Projects.Add(project);
+    await db.SaveChangesAsync(ct);
+
+    project.MarkConverting(DateTimeOffset.UtcNow);
     await db.SaveChangesAsync(ct);
 
     try
     {
         var result = await converter.ConvertAsync(ifcBytes, projectId, ct);
-        project.MarkReady(result.GlbKey, result.UsdzKey, result.ThumbnailKey, result.DurationMs, DateTimeOffset.UtcNow);
+        if (!storage.FileExists(projectId, LocalFileStorage.GlbFileName)
+            || !storage.FileExists(projectId, LocalFileStorage.UsdzFileName)
+            || !storage.FileExists(projectId, LocalFileStorage.ThumbnailFileName))
+        {
+            throw new ConversionException("Converter did not produce all required output files.");
+        }
+
+        project.MarkReady(result.DurationMs, DateTimeOffset.UtcNow);
         await db.SaveChangesAsync(ct);
     }
     catch (ConversionException ex)
@@ -206,6 +233,7 @@ app.MapPost("/upload", async (
         logger.LogWarning(ex, "Conversion failed for project {ProjectId}", projectId);
         project.MarkFailed(ex.Message, DateTimeOffset.UtcNow);
         await db.SaveChangesAsync(ct);
+        return Results.Problem(statusCode: 502, title: "Conversion failed", detail: ex.Message);
     }
 
     var shareUrl = $"{publicBaseUrl}/s/{publicToken}";
@@ -214,6 +242,7 @@ app.MapPost("/upload", async (
     return Results.Ok(new
     {
         token = publicToken,
+        projectId,
         name = project.Name,
         status = project.Status.ToString(),
         shareUrl,
@@ -221,51 +250,71 @@ app.MapPost("/upload", async (
     });
 }).DisableAntiforgery();
 
-// GET /share/{token}
-app.MapGet("/share/{token}", async (
-    string token,
-    AppDbContext db,
-    MinioService minio,
-    MinioSettings minioSettings,
-    CancellationToken ct) =>
+// GET /files/{projectId}/{fileName}
+app.MapGet("/files/{projectId:guid}/{fileName}", (Guid projectId, string fileName, LocalFileStorage storage) =>
 {
-    var project = await db.Projects.AsNoTracking()
-        .FirstOrDefaultAsync(p => p.PublicToken == token, ct);
-    if (project is null || project.Status != ProjectStatus.Ready
-        || string.IsNullOrEmpty(project.GlbObjectKey)
-        || string.IsNullOrEmpty(project.ThumbnailObjectKey))
+    if (fileName is not (LocalFileStorage.GlbFileName or LocalFileStorage.UsdzFileName or LocalFileStorage.ThumbnailFileName))
     {
         return Results.NotFound();
     }
 
-    var glbUrl = await minio.GetPresignedUrlAsync(minioSettings.BucketGlb, project.GlbObjectKey, ct);
-    var thumbUrl = await minio.GetPresignedUrlAsync(minioSettings.BucketThumbnails, project.ThumbnailObjectKey, ct);
+    return ServeProjectFile(projectId, fileName, storage);
+});
 
-    string? usdzUrl = null;
-    if (!string.IsNullOrEmpty(project.UsdzObjectKey))
+// GET /share/{token}
+app.MapGet("/share/{token}", async (string token, AppDbContext db, CancellationToken ct) =>
+{
+    var project = await db.Projects.AsNoTracking()
+        .FirstOrDefaultAsync(p => p.PublicToken == token, ct);
+
+    if (project is null)
     {
-        usdzUrl = await minio.GetPresignedUrlAsync(minioSettings.BucketGlb, project.UsdzObjectKey, ct);
+        return Results.NotFound();
+    }
+
+    if (project.Status == ProjectStatus.Converting || project.Status == ProjectStatus.Uploading)
+    {
+        return Results.Ok(new
+        {
+            name = project.Name,
+            status = project.Status.ToString(),
+            glbUrl = (string?)null,
+            usdzUrl = (string?)null,
+            thumbnailUrl = (string?)null,
+        });
+    }
+
+    if (project.Status != ProjectStatus.Ready)
+    {
+        return Results.NotFound();
     }
 
     return Results.Ok(new
     {
         name = project.Name,
-        glbUrl,
-        usdzUrl,
-        thumbnailUrl = thumbUrl,
+        status = project.Status.ToString(),
+        glbUrl = FileUrl(project.Id, LocalFileStorage.GlbFileName),
+        usdzUrl = FileUrl(project.Id, LocalFileStorage.UsdzFileName),
+        thumbnailUrl = FileUrl(project.Id, LocalFileStorage.ThumbnailFileName),
     });
 });
 
-// GET /share/{token}/qr
-app.MapGet("/share/{token}/qr", async (
-    string token,
-    AppDbContext db,
-    QrCodeService qr,
-    CancellationToken ct) =>
+// GET /share/{token}/qr  (alias: /qrcode/{token})
+app.MapGet("/share/{token}/qr", async (string token, AppDbContext db, QrCodeService qr, CancellationToken ct) =>
 {
     var project = await db.Projects.AsNoTracking()
         .FirstOrDefaultAsync(p => p.PublicToken == token, ct);
-    if (project is null) return Results.NotFound();
+    if (project is null || project.Status != ProjectStatus.Ready) return Results.NotFound();
+    var shareUrl = $"{publicBaseUrl}/s/{token}";
+    var svg = qr.GenerateSvg(shareUrl);
+    return Results.Content(svg, "image/svg+xml");
+});
+
+app.MapGet("/qrcode/{token}", async (string token, AppDbContext db, QrCodeService qr, CancellationToken ct) =>
+{
+    var project = await db.Projects.AsNoTracking()
+        .FirstOrDefaultAsync(p => p.PublicToken == token, ct);
+    if (project is null || project.Status != ProjectStatus.Ready) return Results.NotFound();
     var shareUrl = $"{publicBaseUrl}/s/{token}";
     var svg = qr.GenerateSvg(shareUrl);
     return Results.Content(svg, "image/svg+xml");

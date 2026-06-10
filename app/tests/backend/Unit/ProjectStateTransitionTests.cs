@@ -5,33 +5,42 @@ namespace Arch3DAr.Backend.Tests.Unit;
 
 public class ProjectStateTransitionTests
 {
-    private static readonly Guid OwnerId = Guid.Parse("11111111-1111-1111-1111-111111111111");
     private static readonly DateTimeOffset Now = DateTimeOffset.UtcNow;
 
     [Fact]
-    public void Rejects_Illegal_Transition_UploadReceived_To_Published()
+    public void Create_Starts_Uploading()
     {
-        var p = Project.Create(OwnerId, "n", null, null, "k", 1, Now);
-        Assert.Throws<InvalidStateTransitionException>(() => p.TransitionTo(ProjectStatus.Published, Now));
+        var id = Guid.NewGuid();
+        var p = Project.Create(id, "abc123", "Sofa", 1024, Now);
+        Assert.Equal(ProjectStatus.Uploading, p.Status);
+        Assert.Equal($"projects/{id}", p.DataDirectory);
     }
 
     [Fact]
-    public void Walks_Happy_Path_To_Published()
+    public void MarkConverting_Updates_Status()
     {
-        var p = Project.Create(OwnerId, "n", null, null, "k", 1, Now);
-        p.StartConversion(Now);
-        p.CompleteConversion("g", "t", 100, Now);
-        p.Publish(Now);
-        Assert.Equal(ProjectStatus.Published, p.Status);
+        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", 1024, Now);
+        p.MarkConverting(Now);
+        Assert.Equal(ProjectStatus.Converting, p.Status);
     }
 
     [Fact]
-    public void Allows_Processing_To_Failed()
+    public void MarkReady_Sets_Duration_And_Ready()
     {
-        var p = Project.Create(OwnerId, "n", null, null, "k", 1, Now);
-        p.StartConversion(Now);
-        p.FailConversion("bad", Now);
+        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", 1024, Now);
+        p.MarkConverting(Now);
+        p.MarkReady(4500, Now);
+        Assert.Equal(ProjectStatus.Ready, p.Status);
+        Assert.Equal(4500, p.ConversionDurationMs);
+        Assert.Null(p.ErrorMessage);
+    }
+
+    [Fact]
+    public void MarkFailed_Sets_Error()
+    {
+        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", 1024, Now);
+        p.MarkFailed("USDZ generation failed", Now);
         Assert.Equal(ProjectStatus.Failed, p.Status);
-        Assert.Equal("bad", p.ErrorMessage);
+        Assert.Equal("USDZ generation failed", p.ErrorMessage);
     }
 }

@@ -19,9 +19,7 @@ public class AppDbContext : DbContext
             e.Property(x => x.Name).HasMaxLength(200).IsRequired();
             e.Property(x => x.Status).HasMaxLength(32).HasConversion<string>().IsRequired();
             e.Property(x => x.ErrorMessage).HasMaxLength(500);
-            e.Property(x => x.IfcObjectKey).HasMaxLength(512).IsRequired();
-            e.Property(x => x.GlbObjectKey).HasMaxLength(512);
-            e.Property(x => x.ThumbnailObjectKey).HasMaxLength(512);
+            e.Property(x => x.DataDirectory).HasMaxLength(512).IsRequired();
             e.HasIndex(x => x.PublicToken).IsUnique().HasDatabaseName("ux_projects_public_token");
             e.HasIndex(x => x.CreatedAt).HasDatabaseName("ix_projects_created_at");
         });

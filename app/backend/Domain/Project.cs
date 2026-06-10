@@ -12,13 +12,7 @@ public class Project
 
     public string? ErrorMessage { get; private set; }
 
-    public string IfcObjectKey { get; private set; } = string.Empty;
-
-    public string? GlbObjectKey { get; private set; }
-
-    public string? UsdzObjectKey { get; private set; }
-
-    public string? ThumbnailObjectKey { get; private set; }
+    public string DataDirectory { get; private set; } = string.Empty;
 
     public long IfcSizeBytes { get; private set; }
 
@@ -31,19 +25,20 @@ public class Project
     private Project() { }
 
     public static Project Create(
+        Guid id,
         string publicToken,
         string name,
-        string ifcObjectKey,
         long ifcSizeBytes,
         DateTimeOffset now)
     {
         return new Project
         {
+            Id = id,
             PublicToken = publicToken,
             Name = name.Trim(),
-            IfcObjectKey = ifcObjectKey,
+            DataDirectory = $"projects/{id}",
             IfcSizeBytes = ifcSizeBytes,
-            Status = ProjectStatus.Converting,
+            Status = ProjectStatus.Uploading,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -55,13 +50,11 @@ public class Project
         UpdatedAt = now;
     }
 
-    public void MarkReady(string glbKey, string? usdzKey, string thumbnailKey, long durationMs, DateTimeOffset now)
+    public void MarkReady(long durationMs, DateTimeOffset now)
     {
-        GlbObjectKey = glbKey;
-        UsdzObjectKey = usdzKey;
-        ThumbnailObjectKey = thumbnailKey;
         ConversionDurationMs = durationMs;
         Status = ProjectStatus.Ready;
+        ErrorMessage = null;
         UpdatedAt = now;
     }
 

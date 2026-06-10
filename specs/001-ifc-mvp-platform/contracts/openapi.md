@@ -1,335 +1,226 @@
-# OpenAPI / HTTP Contracts: Arch3DAR MVP
+# OpenAPI / HTTP Contracts: Arch3DAR — Correção MVP
 
 **Phase**: 1
-**Branch**: `001-ifc-mvp-platform`
-**Date**: 2026-06-09
-**Spec**: `specs/001-ifc-mvp-platform/spec.md`
+**Branch**: `main`
+**Date**: 2026-06-10
+**Plan**: `specs/001-ifc-mvp-platform/plan.md`
 
-> All MVP contracts. Authentication is **cookie-based** (ASP.NET Core Identity); the public share endpoint is the only anonymous one. ProblemDetails (`application/problem+json`) is the canonical error shape (RFC 7807) for non-2xx responses. Every request is expected to carry a `X-Correlation-Id` header (the server generates one if absent and echoes it back).
+> API mínima sem autenticação e sem MinIO. Todos os assets servidos diretamente pelo backend (proxied por nginx em produção). **Nenhum endpoint de asset usa redirect.**
 
 ---
 
 ## Conventions
 
-- **Base URL (dev)**: `http://localhost:5000`
-- **Base URL (public)**: `${PUBLIC_BASE_URL}` (env)
-- **Auth**: `POST /auth/login` sets the `.AspNetCore.Identity.Application` cookie. All `/api/projects/*` endpoints require it. `GET /api/share/{token}` does **not**.
-- **Correlation**: every request/response carries `X-Correlation-Id`. Server-side, every `ILogger` event has the same value attached via Serilog `LogContext`.
-- **Errors**: `application/problem+json` per RFC 7807. Examples below.
-- **Time**: ISO-8601 UTC.
-- **JSON casing**: `camelCase`. Enum values are kebab-case strings (e.g. `ready-to-publish`), matching the spec FR-006 status names.
+- **Base URL (dev)**: `http://localhost:5001` (backend direto) ou `https://localhost` (via nginx)
+- **Base URL (prod)**: `${PUBLIC_BASE_URL}` — **deve ser HTTPS** para AR
+- **Auth**: nenhuma
+- **Correlation**: header `X-Correlation-Id` (gerado se ausente)
+- **Errors**: `application/problem+json` (RFC 7807)
+- **JSON casing**: `camelCase`
+- **Asset URLs**: absolutas, same-origin, sem query-string de presign
 
 ### ProblemDetails shape
 
 ```json
 {
-  "type": "https://arch3dar.com/errors/invalid-state-transition",
-  "title": "Invalid state transition",
-  "status": 409,
-  "detail": "Cannot publish a project in status 'processing'. Wait for conversion to finish.",
-  "instance": "/api/projects/8b7e4f1a-.../publish",
+  "type": "https://arch3dar.com/errors/conversion-failed",
+  "title": "Conversion failed",
+  "status": 502,
+  "detail": "USDZ generation failed: usd_from_gltf exited 1",
   "correlationId": "f0e1d2c3-b4a5-..."
 }
 ```
 
-The `correlationId` field is added to the standard ProblemDetails by the global error middleware; it mirrors the `X-Correlation-Id` header.
-
 ---
 
-## Endpoints (summary)
+## Endpoints
 
-| Method | Path | Auth | Spec FR |
+| Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | `/auth/register` | none | — |
-| POST | `/auth/login` | none | — |
-| POST | `/auth/logout` | cookie | — |
-| GET  | `/api/projects` | cookie | FR-021 |
-| POST | `/api/projects` | cookie | FR-001, FR-002 |
-| GET  | `/api/projects/{id}` | cookie | FR-022 |
-| POST | `/api/projects/{id}/publish` | cookie | FR-011, FR-013 |
-| GET  | `/api/share/{token}` | **none** | FR-015, FR-025 |
-| GET  | `/health` | none | — |
+| POST | `/upload` | none | Upload IFC, converte, retorna link + QR |
+| GET | `/share/{token}` | none | Metadados + URLs dos assets |
+| GET | `/files/{projectId}/model.glb` | none | Stream GLB |
+| GET | `/files/{projectId}/model.usdz` | none | Stream USDZ |
+| GET | `/files/{projectId}/thumbnail.png` | none | Stream thumbnail |
+| GET | `/share/{token}/qr` | none | QR code SVG |
+| GET | `/health` | none | Liveness |
 
 ---
 
-## POST /auth/register
+## POST /upload
 
-Creates a new user. The first user is the first tenant. After registration, the cookie is set automatically.
+Upload IFC, executa conversão síncrona (backend → converter HTTP), persiste em `/data`, retorna link público.
 
 **Request**
 
 ```http
-POST /auth/register
-Content-Type: application/json
+POST /upload
+Content-Type: multipart/form-data
 
-{
-  "email": "alice@example.com",
-  "password": "correcthorsebatterystaple"
-}
+file=<binary .ifc>
+name=Living Room Sofa   (optional)
 ```
 
 **Validation**
-- `email` must be a valid email.
-- `password` must be ≥ 8 chars (Identity default).
+- `file` obrigatório, extensão `.ifc`
+- Primeira linha do conteúdo: `ISO-10303-21`
+- Tamanho ≤ `MAX_IFC_MB` (default 100)
 
 **Responses**
-- `200 OK` — sets the auth cookie, returns `{ "userId": "..." }`.
-- `400 Bad Request` — validation failed (ProblemDetails).
-- `409 Conflict` — email already in use.
+
+- `200 OK`
 
 ```json
-{ "userId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b" }
-```
-
----
-
-## POST /auth/login
-
-**Request**
-
-```http
-POST /auth/login
-Content-Type: application/json
-
-{ "email": "alice@example.com", "password": "correcthorsebatterystaple" }
-```
-
-**Responses**
-- `204 No Content` — cookie set.
-- `401 Unauthorized` — bad credentials.
-
----
-
-## POST /auth/logout
-
-Clears the cookie.
-
-**Responses**
-- `204 No Content`
-
----
-
-## POST /api/projects
-
-Creates a project AND uploads its IFC in a single multipart call (FR-001, FR-002, FR-003, FR-004, FR-005). The project is created in status `upload-received`.
-
-**Request**
-
-```http
-POST /api/projects
-Cookie: .AspNetCore.Identity.Application=...
-Content-Type: multipart/form-data; boundary=----abc
-
-------abc
-Content-Disposition: form-data; name="name"
-
-Living Room Sofa
-------abc
-Content-Disposition: form-data; name="description"
-
-3-seat sofa in walnut
-------abc
-Content-Disposition: form-data; name="clientLabel"
-
-Alice
-------abc
-Content-Disposition: form-data; name="file"; filename="project.ifc"
-Content-Type: application/octet-stream
-
-<binary>
-------abc--
-```
-
-**Validation (server-side, in order)**
-1. `name` 1–200 chars.
-2. `description` ≤ 2000 chars (optional).
-3. `clientLabel` ≤ 200 chars (optional).
-4. `file` present, size ≤ `MAX_IFC_MB` × 1024 × 1024.
-5. `file` content starts with `ISO-10303-21;` (signature check).
-6. `file` filename extension is `.ifc`.
-
-The file is streamed directly to MinIO (no in-memory buffering) under key `ifc-files/projects/{projectId}/source.ifc`. The project row is created only after the MinIO upload succeeds (atomicity).
-
-**Responses**
-
-- `201 Created`
-  ```json
-  {
-    "id": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-    "name": "Living Room Sofa",
-    "status": "upload-received",
-    "createdAt": "2026-06-09T12:00:00Z"
-  }
-  ```
-- `400 Bad Request` — validation failed (ProblemDetails with `type` and `detail`).
-- `413 Payload Too Large` — file too big.
-- `415 Unsupported Media Type` — not an IFC file.
-
----
-
-## GET /api/projects
-
-Lists the calling user's projects (FR-021). Tenant-scoped.
-
-**Request**
-
-```http
-GET /api/projects
-Cookie: .AspNetCore.Identity.Application=...
-```
-
-**Query params**
-- `status` (optional) — filter by `ProjectStatus` value.
-- `limit` (optional, default 50, max 200) — page size.
-- `cursor` (optional) — opaque pagination cursor (createdAt + id).
-
-**Response**
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
 {
-  "items": [
-    {
-      "id": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-      "name": "Living Room Sofa",
-      "clientLabel": "Alice",
-      "status": "ready-to-publish",
-      "thumbnailUrl": "https://minio:9000/thumbnails/projects/8b.../thumb.png?X-Amz-...",
-      "createdAt": "2026-06-09T12:00:00Z"
-    }
-  ],
-  "nextCursor": null
+  "token": "a1b2c3d4e5f6789012345678abcdef01",
+  "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
+  "name": "Living Room Sofa",
+  "status": "Ready",
+  "shareUrl": "https://app.example.com/s/a1b2c3d4e5f6789012345678abcdef01",
+  "qrSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" ...></svg>"
 }
 ```
 
-`thumbnailUrl` is a presigned MinIO URL (TTL 5 min). It is `null` if the thumbnail has not been generated yet (status `upload-received` or `processing`).
+- `400` — campo `file` ausente
+- `413` — arquivo grande demais
+- `415` — não é IFC válido
+- `502` — conversão falhou (GLB ou USDZ)
+
+**Notes**
+- Request pode demorar até `CONVERSION_TIMEOUT_S` (default 120s).
+- Cliente deve exibir spinner durante upload+conversão.
 
 ---
 
-## GET /api/projects/{id}
+## GET /share/{token}
 
-Project detail (FR-022).
-
-**Request**
-
-```http
-GET /api/projects/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b
-Cookie: .AspNetCore.Identity.Application=...
-```
+Retorna dados para o viewer. Token = 32-char hex do `PublicToken`.
 
 **Responses**
-- `200 OK` — `ProjectDto` (see data-model.md).
-- `404 Not Found` — caller does not own the project, **or** it doesn't exist (no enumeration leak; SC-006).
+
+- `200 OK` — projeto Ready
+
+```json
+{
+  "name": "Living Room Sofa",
+  "status": "Ready",
+  "glbUrl": "https://app.example.com/files/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/model.glb",
+  "usdzUrl": "https://app.example.com/files/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/model.usdz",
+  "thumbnailUrl": "https://app.example.com/files/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/thumbnail.png"
+}
+```
+
+- `200 OK` — ainda convertendo
+
+```json
+{
+  "name": "Living Room Sofa",
+  "status": "Converting",
+  "glbUrl": null,
+  "usdzUrl": null,
+  "thumbnailUrl": null
+}
+```
+
+- `404` — token inválido ou projeto Failed
 
 ---
 
-## POST /api/projects/{id}/publish
+## GET /files/{projectId}/model.glb
 
-Publishes a project. Idempotent (FR-013). On the first call:
-1. Validates `Status == 'ready-to-publish'`.
-2. Creates a `ShareLink` row (unique on `ProjectId`).
-3. Generates a QR code from `${PUBLIC_BASE_URL}/s/{PublicToken}`.
-4. Uploads the QR PNG to MinIO.
-5. Sets `Project.Status = 'published'`, `PublishedAt = now()`.
-6. Returns the result.
-
-On a second call, the existing `ShareLink` is returned without re-uploading.
-
-**Request**
-
-```http
-POST /api/projects/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/publish
-Cookie: .AspNetCore.Identity.Application=...
-```
+Serve o GLB diretamente.
 
 **Responses**
-
-- `200 OK`:
-  ```json
-  {
-    "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-    "publicToken": "3f2e1d0c-b9a8-7654-3210-fedcba987654",
-    "publicUrl": "https://app.example.com/s/3f2e1d0c-b9a8-7654-3210-fedcba987654",
-    "qrCodeUrl": "https://minio:9000/qrcodes/projects/8b.../qr.png?X-Amz-..."
-  }
-  ```
-- `404 Not Found` — caller does not own the project.
-- `409 Conflict` — project status is not `ready-to-publish`. ProblemDetails `type=https://arch3dar.com/errors/invalid-state-transition`.
+- `200 OK`
+  - `Content-Type: model/gltf-binary`
+  - `Accept-Ranges: bytes`
+  - Body: binary GLB
+  - **Sem** header `Location`
+- `404` — arquivo ou projeto inexistente
 
 ---
 
-## GET /api/share/{token}  (anonymous, public)
+## GET /files/{projectId}/model.usdz
 
-Returns the minimum data needed to render the public page (FR-015, FR-025). No internal ids, no tenant info, no `errorMessage`.
-
-**Request**
-
-```http
-GET /api/share/3f2e1d0c-b9a8-7654-3210-fedcba987654
-```
+Serve o USDZ diretamente para Quick Look / `ios-src`.
 
 **Responses**
+- `200 OK`
+  - `Content-Type: model/vnd.usdz+zip`
+  - Body: binary USDZ (zip)
+  - **Sem** header `Location`
+- `404` — arquivo ou projeto inexistente
 
-- `200 OK`:
-  ```json
-  {
-    "name": "Living Room Sofa",
-    "clientLabel": "Alice",
-    "status": "published",
-    "glbUrl": "https://minio:9000/glb-files/projects/8b.../model.glb?X-Amz-...",
-    "thumbnailUrl": "https://minio:9000/thumbnails/projects/8b.../thumb.png?X-Amz-..."
-  }
-  ```
-- `404 Not Found` — token unknown, or the project is not in `published` status yet. Same response either way (no enumeration leak).
+---
+
+## GET /files/{projectId}/thumbnail.png
+
+**Responses**
+- `200 OK`, `Content-Type: image/png`
+- `404`
+
+---
+
+## GET /share/{token}/qr
+
+Retorna QR code como SVG apontando para `shareUrl`.
+
+**Responses**
+- `200 OK`, `Content-Type: image/svg+xml`
+- `404`
 
 ---
 
 ## GET /health
 
-**Response**
-- `200 OK` — `{"status":"ok"}` if the API process is up. Does **not** check Postgres or MinIO. Used by docker-compose `healthcheck`.
+```json
+{ "status": "ok" }
+```
 
 ---
 
-## Error catalog
-
-| `type` suffix | HTTP | When |
-|---|---|---|
-| `/errors/validation` | 400 | FluentValidation failure. `errors` object included. |
-| `/errors/invalid-ifc` | 415 | File signature check failed. |
-| `/errors/file-too-large` | 413 | File > `MAX_IFC_MB`. |
-| `/errors/invalid-state-transition` | 409 | `TransitionTo(...)` rejected, or publish called on non-ready project. |
-| `/errors/not-found` | 404 | Resource missing OR cross-tenant. |
-| `/errors/unauthorized` | 401 | Auth required and missing. |
-| `/errors/forbidden` | 403 | Authenticated but not allowed. |
-| `/errors/internal` | 500 | Unhandled exception. Stack trace **never** in body (FR-028). |
-
----
-
-## Python Converter HTTP Contract (internal)
-
-The Python converter sidecar exposes a tiny HTTP API consumed by `HttpModelConverter` in the .NET backend. This is an **internal** contract (not exposed to the browser); it is documented here so the two services can be developed independently.
+## Converter sidecar contract (internal)
 
 `POST http://converter:8080/convert`
 
-```json
-{ "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b" }
-```
+**Request**: `multipart/form-data`
+- `projectId` (uuid string)
+- `file` (IFC bytes)
 
-Response:
+**Response** `200`:
 
 ```json
 {
-  "glbKey": "projects/8b7e4f1a-.../model.glb",
-  "thumbnailKey": "projects/8b7e4f1a-.../thumb.png",
-  "durationMs": 12345
+  "glbPath": "projects/{id}/model.glb",
+  "usdzPath": "projects/{id}/model.usdz",
+  "thumbnailPath": "projects/{id}/thumbnail.png",
+  "durationMs": 45230
 }
 ```
 
-Errors:
-- `400` if `projectId` not in `Processing` status.
-- `500` with `{ "reason": "..." }` on conversion failure (the .NET side persists this as `ErrorMessage`).
+**Behavior**
+- Escreve arquivos em `/data/projects/{id}/` (volume compartilhado).
+- Falha `422` se GLB ou USDZ vazios.
+- Não usa MinIO.
 
-The converter itself owns the Postgres polling + `FOR UPDATE SKIP LOCKED` claim; the .NET side never tells it "what" to convert beyond the project id.
+**Pipeline**
+1. `IfcConvert input.ifc output.glb`
+2. `IfcConvert input.ifc thumb.png --thumbnail` (fallback: placeholder PNG)
+3. `usd_from_gltf output.glb output.usdz`
+
+---
+
+## nginx proxy rules (production)
+
+```nginx
+# API
+location /upload { proxy_pass http://backend:5000/upload; proxy_redirect off; }
+location /share/ { proxy_pass http://backend:5000/share/; proxy_redirect off; }
+location /files/ { proxy_pass http://backend:5000/files/; proxy_redirect off; }
+location /health { proxy_pass http://backend:5000/health; proxy_redirect off; }
+
+# SPA
+location / { try_files $uri $uri/ /index.html; }
+```
+
+TLS termination no nginx. Certificado válido obrigatório para testes AR em dispositivos reais.

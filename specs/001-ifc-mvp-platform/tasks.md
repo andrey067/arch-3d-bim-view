@@ -1,242 +1,169 @@
----
-description: "Task list for Arch3DAR MVP — IFC-to-AR 3D sharing SaaS"
----
+# Tasks: Arch3DAR — Correção MVP IFC → AR (Android + iPhone)
 
-# Tasks: Arch3DAR — IFC-to-AR 3D Sharing MVP
+**Input**: Design documents from `specs/001-ifc-mvp-platform/`
 
-**Input**: Design documents from `/specs/001-ifc-mvp-platform/`
-- `plan.md` (tech stack + structure)
-- `spec.md` (5 user stories: US1 P1, US2 P1, US3 P1, US4 P2, US5 P3 — 33 functional requirements)
-- `research.md` (10 decisions: ASP.NET Core 9, MediatR, Serilog, QRCoder, MinIO, `<model-viewer>`, IfcOpenShell, Postgres `FOR UPDATE SKIP LOCKED`, ASP.NET Identity cookies, xUnit+Testcontainers+Playwright)
-- `data-model.md` (`Project`, `ShareLink`, ASP.NET Identity)
-- `contracts/openapi.md` (8 HTTP endpoints + Python converter HTTP)
-- `quickstart.md` (10 runnable end-to-end scenarios)
+**Prerequisites**: plan.md, spec.md (correction scope in plan.md supersedes auth/MinIO portions), research.md, data-model.md, contracts/openapi.md, quickstart.md
 
-**Tests**: Required by `.specify/memory/constitution.md` §IV. Test tasks are interleaved with implementation tasks per user story.
+**Tests**: Included — plan and acceptance criteria explicitly require automated tests for upload, GLB/USDZ conversion, and file download.
 
-**Organization**: Tasks are grouped by user story so each is independently implementable, testable, and deployable.
+**Organization**: Tasks grouped by correction user story (US1–US4). Auth, dashboard, and MinIO are out of scope.
 
 ## Format: `[ID] [P?] [Story] Description`
 
-- **[P]**: Can run in parallel (different files, no dependencies)
-- **[Story]**: User-story label (`[US1]…[US5]`). Setup/Foundational/Polish phases have no story label.
-- Each task includes an exact file path.
+- **[P]**: Can run in parallel (different files, no dependencies on incomplete tasks)
+- **[Story]**: Maps to correction user story (US1–US4)
+- Every task includes an exact file path
 
-## Path Conventions
+## User Story Mapping (Correction Scope)
 
-Web application layout (per `plan.md` and the constitution's `app/{backend,frontend,converter,tests}/` mandate):
-
-- Backend: `app/backend/{Domain,Application,Infrastructure,Api}/`
-- Frontend: `app/frontend/src/{pages,components,api,auth}/`
-- Converter: `app/converter/`
-- Backend tests: `app/tests/backend/{Unit,Integration,Contract}/`
-- Frontend tests: `app/tests/frontend/{Unit,E2E}/`
+| Story | Priority | Goal | Independent Test |
+|---|---|---|---|
+| **US1** | P1 | Upload IFC → conversão GLB + USDZ → persistência em `/data` | `POST /upload` retorna `Ready`; arquivos existem em `/data/projects/{id}/` |
+| **US2** | P1 | Servir GLB/USDZ/thumbnail diretamente + Share API + QR | `GET /files/...` retorna 200, MIME correto, sem `Location` header |
+| **US3** | P1 | Visualização Web 3D no link público | Abrir `/s/{token}` — thumbnail + GLB renderizam com orbit/zoom |
+| **US4** | P1 | AR Android (Scene Viewer) + iPhone (Quick Look) | Tap AR em Android e iPhone sem "Object could not be opened" |
 
 ---
 
 ## Phase 1: Setup (Shared Infrastructure)
 
-**Purpose**: Project initialization, dependency wiring, repo hygiene. Everything here is independent of any user story.
+**Purpose**: Remover MinIO do stack e preparar volume local compartilhado
 
-- [X] T001 Create `app/backend/{Domain,Application/Abstractions,Application/Projects/Commands,Application/Projects/Queries,Application/Projects/Validators,Application/Projects/Dtos,Application/Sharing/Dtos,Infrastructure,Api/Endpoints,Migrations}` folder skeleton in `app/backend/`
-- [X] T002 [P] Add NuGet packages to `app/backend/Backend.csproj`: `MediatR` 14.x, `Microsoft.EntityFrameworkCore.Design` 9.x, `Npgsql.EntityFrameworkCore.PostgreSQL` 9.x, `Microsoft.AspNetCore.Identity.EntityFrameworkCore` 9.x, `FluentValidation.AspNetCore` 11.x, `QRCoder` 1.8.x, `Serilog.AspNetCore` 9.x, `Minio` 6.0.x, `Swashbuckle.AspNetCore` 7.x, `xunit` 2.x (test project)
-- [X] T003 [P] Add dev dependencies to `app/frontend/package.json`: `vitest`, `@testing-library/react`, `@testing-library/user-event`, `@playwright/test`, `jsdom`
-- [X] T004 [P] Add `app/converter/requirements.txt` entries: `fastapi`, `uvicorn[standard]`, `minio>=7.0.0`, `psycopg[binary]>=3.1.0`, `ifcopenshell==0.8.0`, `Pillow`
-- [X] T005 [P] Add `app/backend/.gitignore` patterns for `bin/`, `obj/`, `*.user`; add top-level `app/.gitignore` entries for `app/backend/obj/`, `app/converter/__pycache__/`, `.env`, `app/backend/.env`
-- [X] T006 [P] Delete `app/converter/__pycache__/` (stale Python 3.14 bytecode) and add it to `app/converter/.gitignore`
-- [X] T007 [P] Add `app/.env.example` keys: `PUBLIC_BASE_URL`, `MAX_IFC_MB=100`, `CONVERSION_TIMEOUT_S=300`, `ASPNETCORE_SIGNING_KEY` (or use Identity's default), `CORS_ALLOWED_ORIGINS`
-- [X] T008 [P] Configure Serilog in `app/backend/Api/Program.cs` with console + structured JSON sinks, `LogContext` push for `CorrelationId`, and `UseSerilogRequestLogging()`
-- [X] T009 [P] Set up ESLint + Prettier in `app/frontend/` with `tsconfig.json` `strict: true` and React 18 JSX runtime
-- [X] T010 [P] Pin `IfcConvert` Linux64 binary URL and sha256 in `app/converter/Dockerfile`; remove the silent `|| echo "WARNING"` fallback so a failed download is a hard build failure
-- [X] T011 [P] Add `app/backend/Dockerfile` healthcheck (`HEALTHCHECK CMD curl --fail http://localhost:5000/health || exit 1`)
+- [x] T001 Remove `minio` service, `minio_data` volume, and MinIO env vars from `app/docker-compose.yml`; add `project_data` volume mounted at `/data` on `backend` and `converter`
+- [x] T002 [P] Replace MinIO variables with `DATA_ROOT=/data` and document `PUBLIC_BASE_URL` (HTTPS) in `app/.env.example`
+- [x] T003 [P] Remove `Minio` NuGet package reference from `app/backend/Backend.csproj`
+- [x] T004 [P] Remove `minio` dependency from `app/converter/requirements.txt`; drop trimesh/pxr if replaced by `usd_from_gltf`
+- [x] T005 [P] Update `app/README.md` to document local storage layout `/data/projects/{id}/` and removal of MinIO
+- [x] T006 [P] Add `build-converter` and `verify-no-minio` targets to `Makefile` if useful for CI smoke checks
 
 ---
 
 ## Phase 2: Foundational (Blocking Prerequisites)
 
-**Purpose**: Core infrastructure that MUST be complete before any user story can be implemented. After this phase, all five user stories can start in parallel.
+**Purpose**: Infraestrutura core que bloqueia todas as user stories
 
-**⚠️ CRITICAL**: No user story work can begin until this phase is complete.
+**⚠️ CRITICAL**: Nenhuma user story começa antes desta fase
 
-- [X] T012 Create `Project` entity with state machine in `app/backend/Domain/Project.cs`: `Id (Guid)`, `OwnerId (Guid)`, `Name`, `Description?`, `ClientLabel?`, `Status`, `ErrorMessage?`, `IfcObjectKey?`, `GlbObjectKey?`, `ThumbnailObjectKey?`, `IfcSizeBytes?`, `ConversionStartedAt?`, `ConversionDurationMs?`, `CreatedAt`, `UpdatedAt`, `PublishedAt?`; add `TransitionTo(ProjectStatus next)` method that validates the diagram in `data-model.md §State machine` and throws `InvalidStateTransitionException` on illegal transitions
-- [X] T013 [P] Create `ProjectStatus` enum in `app/backend/Domain/ProjectStatus.cs` with values `UploadReceived, Processing, ReadyToPublish, Published, Failed` (spec FR-006)
-- [X] T014 [P] Create `ShareLink` entity in `app/backend/Domain/ShareLink.cs`: `Id (Guid)`, `ProjectId (Guid)`, `PublicToken (Guid)`, `QrCodeObjectKey?`, `CreatedAt`; unique index on `ProjectId` and on `PublicToken`
-- [X] T015 [P] Create `IModelConverter` interface in `app/backend/Application/Abstractions/IModelConverter.cs` with `Task<ConversionResult> ConvertAsync(Guid projectId, CancellationToken ct)`; `ConversionResult` record in same file
-- [X] T016 [P] Create `CorrelationIdMiddleware` in `app/backend/Infrastructure/CorrelationIdMiddleware.cs` that reads `X-Correlation-Id` (or generates a Guid) and pushes it into `Serilog.Context.LogContext`
-- [X] T017 [P] Create `MinioService` in `app/backend/Infrastructure/MinioService.cs` with `EnsureBucketsAsync`, `UploadStreamAsync(bucket, key, stream, contentType)`, `GetPresignedUrlAsync(bucket, key, ttl)` (use the `Minio` NuGet 6.0.x; presigned-URL TTL = 10 min)
-- [X] T018 [P] Create `QrCodeService` in `app/backend/Infrastructure/QrCodeService.cs` with `byte[] GeneratePng(string url)` using `PngByteQRCodeHelper.GetQRCode(url, ECCLevel.Q, pixelsPerModule: 20)`; returns PNG bytes
-- [X] T019 [P] Create `AppDbContext` in `app/backend/Infrastructure/AppDbContext.cs` with `DbSet<Project>`, `DbSet<ShareLink>`, `IdentityDbContext<IdentityUser, IdentityRole, Guid>` base, global query filter `OwnerId == currentUserId`, fluent config matching `data-model.md §Indexes`
-- [X] T020 [P] Create EF migration `00000000000000_Initial.cs` (`dotnet ef migrations add Initial`) creating `projects`, `share_links`, all indexes, and FKs
-- [X] T021 [P] Add ASP.NET Identity registration in `app/backend/Api/Program.cs`: `AddIdentity<IdentityUser, IdentityRole>().AddEntityFrameworkStores<AppDbContext>().AddDefaultTokenProviders()`; cookie auth defaults; `[Authorize]` on `/api/projects/*`; `[AllowAnonymous]` on `/api/share/*` and `/health`; replace `EnsureCreated()` with `Database.Migrate()` on startup
-- [X] T022 [P] Register MediatR in `app/backend/Api/Program.cs` with `cfg.RegisterServicesFromAssembly(typeof(Program).Assembly)`; register `FluentValidation` and auto-validate; register `HttpModelConverter` as the `IModelConverter` implementation pointed at `http://converter:8080`
-- [X] T023 [P] Add ProblemDetails middleware in `app/backend/Api/Program.cs` returning `application/problem+json` with `correlationId` field; map `InvalidStateTransitionException` → 409, `ValidationException` → 400 with `errors` object, default unhandled → 500 with no stack trace
-- [X] T024 [P] Create `app/backend/Api/Endpoints/AuthEndpoints.cs` with `POST /auth/register`, `POST /auth/login`, `POST /auth/logout`; responses per `contracts/openapi.md §POST /auth/register`
-- [X] T025 [P] Create test project `app/tests/backend/Backend.Tests.csproj` with xUnit + FluentAssertions + Testcontainers + `Microsoft.AspNetCore.Mvc.Testing`; reference `app/backend/Backend.csproj`
-- [X] T026 [P] Create test project `app/tests/frontend/` with `vitest.config.ts`, `playwright.config.ts`, and a `setupTests.ts` registering `@testing-library/jest-dom`
-- [X] T027 [P] Add fixture `app/tests/backend/Integration/Fixtures/sample.ifc` (200 KB sample IFC2x3 file, committed binary)
-- [X] T028 [P] Create `app/tests/backend/Integration/AppFactory.cs` extending `WebApplicationFactory<Program>` with `Testcontainers.PostgreSql`, `Testcontainers.Minio`, and a one-shot `Testcontainers.GenericContainer` running the `app/converter` image (binds to a `http://converter:8080` test endpoint)
-- [X] T029 [P] Create `app/converter/converter_service.py` exposing `POST /convert` (per `contracts/openapi.md §Python Converter HTTP Contract`) and a `claim_pending_projects` loop using `SELECT … FOR UPDATE SKIP LOCKED`; thin `app/converter/converter.py` shim that re-exports the new module
-- [X] T030 [P] Update `app/docker-compose.yml` to drop the dev-only `nginx` service and ensure `depends_on: service_healthy` chains for `backend → postgres + minio` and `converter → minio + postgres`; pin all image tags to specific versions
+- [x] T007 Create `app/backend/Infrastructure/LocalFileStorage.cs` with `EnsureProjectDir`, `WriteFile`, `ResolvePath`, `FileExists` under `{DATA_ROOT}/projects/{id}/`
+- [x] T008 [P] Create `app/backend/Infrastructure/ModelContentTypeMiddleware.cs` mapping `.glb` → `model/gltf-binary`, `.usdz` → `model/vnd.usdz+zip`, `.png` → `image/png`
+- [x] T009 Update `app/backend/Domain/Project.cs` and `app/backend/Domain/ProjectStatus.cs` per `data-model.md` (DataDirectory, file names, no MinIO keys)
+- [x] T010 Update `app/backend/Infrastructure/AppDbContext.cs` entity configuration for simplified `projects` table
+- [x] T011 Update `app/backend/Migrations/20260610000000_Initial.cs` to match simplified schema (drop `share_links`/Identity if present)
+- [x] T012 Create `app/converter/usd_converter.py` wrapping `usd_from_gltf` CLI with timeout and error handling
+- [x] T013 Update `app/converter/Dockerfile` to install/bake `usd_from_gltf` binary (e.g. from `marlon360/usd-from-gltf` stage) on Linux
+- [x] T014 Refactor `app/converter/converter_service.py` to write `original.ifc`, `model.glb`, `model.usdz`, `thumbnail.png` to `/data/projects/{id}/` and remove all MinIO code
+- [x] T015 Delete `app/backend/Infrastructure/MinioService.cs` and remove all references
+- [x] T016 Update `app/backend/Infrastructure/HttpModelConverter.cs` to call converter sidecar and return local relative paths (not MinIO keys)
 
-**Checkpoint**: Foundation ready — every user story can now start in parallel.
+**Checkpoint**: Foundation ready — converter writes to `/data`, backend can read paths, MinIO removed from code
 
 ---
 
-## Phase 3: User Story 1 — Architect publishes a model and shares a public link (Priority: P1) 🎯 MVP
+## Phase 3: User Story 1 — Upload + Conversão GLB/USDZ (Priority: P1) 🎯 MVP
 
-**Goal**: An architect creates a project, uploads an `.ifc`, the system stores it, the converter runs and produces a GLB + thumbnail, and the architect publishes and receives a public URL + QR code.
+**Goal**: `POST /upload` aceita IFC, executa pipeline IfcConvert → GLB → `usd_from_gltf` → USDZ, persiste em disco local
 
-**Independent Test**: Create a project, upload a valid IFC, watch status reach `ready-to-publish`, call `POST /api/projects/{id}/publish`, confirm response includes a `publicUrl` and a `qrCodeUrl`; calling publish again returns the same token (idempotent).
+**Independent Test**: `curl -F file=@sample.ifc http://localhost:5001/upload` → `status: Ready`; `ls /data/projects/{id}/` mostra os 4 arquivos
 
-### Tests for User Story 1 ⚠️
+### Tests for User Story 1
 
-- [X] T031 [P] [US1] Unit test `Project.TransitionTo` in `app/tests/backend/Unit/ProjectStateTransitionTests.cs`: 6 valid transitions, 6 invalid transitions, terminal `Published` rejects further moves
-- [X] T032 [P] [US1] Unit test publish idempotency in `app/tests/backend/Unit/PublishProjectHandlerTests.cs`: second `PublishProject` call returns the same `publicToken` and does not create a second `ShareLink` row
-- [X] T033 [P] [US1] Integration test upload+convert+publish in `app/tests/backend/Integration/ProjectLifecycleTests.cs`: upload a `sample.ifc`, poll until `ready-to-publish`, publish, assert `publicUrl` matches `${PUBLIC_BASE_URL}/s/{guid}`, assert presigned QR URL returns a 200 with `Content-Type: image/png`
-- [X] T034 [P] [US1] Integration test upload validation in `app/tests/backend/Integration/UploadValidationTests.cs`: non-IFC file → 415 + ProblemDetails; oversize file → 413; missing name → 400 with `errors.name`
-- [X] T035 [P] [US1] Integration test conversion failure in `app/tests/backend/Integration/ConversionFailureTests.cs`: a corrupted IFC in the test project makes the converter return 500; project transitions to `Failed` with a user-readable `ErrorMessage`; `POST /publish` returns 409
-- [X] T036 [P] [US1] Contract test `POST /api/projects` response shape in `app/tests/backend/Contract/CreateProjectContractTests.cs`: snapshot test against `ProjectDto` schema in `data-model.md §ProjectDto`
+- [x] T017 [P] [US1] Create `app/tests/backend/Integration/UploadConversionTests.cs` — POST `/upload` with `app/tests/backend/Integration/Fixtures/sample.ifc`, assert `Ready`, assert files on disk
+- [x] T018 [P] [US1] Add converter smoke test in `app/converter/test_usd_converter.py` — GLB fixture → non-empty valid USDZ zip
 
 ### Implementation for User Story 1
 
-- [X] T037 [P] [US1] Create `CreateProjectHandler` in `app/backend/Application/Projects/Commands/CreateProjectHandler.cs`: accepts `CreateProjectCommand(name, description?, clientLabel?, IFormFile file)`, streams the file to MinIO under `ifc-files/projects/{id}/source.ifc`, persists the `Project` row, returns `ProjectDto`
-- [X] T038 [P] [US1] Create `CreateProjectValidator` in `app/backend/Application/Projects/Validators/CreateProjectValidator.cs` with FluentValidation rules for FR-001/003/004/033 (name 1–200, description ≤ 2000, clientLabel ≤ 200, file present, file size, file signature, file extension)
-- [X] T039 [P] [US1] Create `PublishProjectHandler` in `app/backend/Application/Projects/Commands/PublishProjectHandler.cs`: looks up existing `ShareLink` by `ProjectId` (idempotent); on miss, creates one with `PublicToken = Guid.NewGuid()`, calls `QrCodeService.GeneratePng(publicUrl)`, uploads to `qrcodes/projects/{projectId}/qr.png`, transitions project to `Published`; returns `PublishResultDto`
-- [X] T040 [P] [US1] Create `PublishProjectValidator` in `app/backend/Application/Projects/Validators/PublishProjectValidator.cs`: asserts `Status == ReadyToPublish`
-- [X] T041 [P] [US1] Create `GetProjectHandler` in `app/backend/Application/Projects/Queries/GetProjectHandler.cs`: returns `ProjectDto` for the given `id`; throws `NotFoundException` if missing OR not owned by current user (no enumeration leak; SC-006)
-- [X] T042 [P] [US1] Create `ListProjectsHandler` in `app/backend/Application/Projects/Queries/ListProjectsHandler.cs`: tenant-scoped, paginated by `createdAt + id` cursor, returns `ProjectSummaryDto[]`
-- [X] T043 [US1] Create `ProjectsEndpoints` in `app/backend/Api/Endpoints/ProjectsEndpoints.cs` mapping `POST /api/projects`, `GET /api/projects`, `GET /api/projects/{id}`, `POST /api/projects/{id}/publish` per `contracts/openapi.md` (depends on T037, T039, T041, T042)
-- [X] T044 [US1] Implement `HttpModelConverter` in `app/backend/Infrastructure/HttpModelConverter.cs`: `IModelConverter.ConvertAsync` POSTs `{ "projectId": "..." }` to `${CONVERTER_URL}/convert`; maps non-2xx to `ConversionException(reason)` (depends on T022)
-- [X] T045 [US1] Stream upload (no in-memory buffering) in `CreateProjectHandler`: use `IFormFile.OpenReadStream()` and pipe directly into `MinioService.UploadStreamAsync`; only create the project row after the MinIO upload completes (atomic; fixes Risk 4 from research §R-04)
+- [x] T019 [US1] Refactor `POST /upload` in `app/backend/Program.cs` to save IFC via `LocalFileStorage` instead of MinIO
+- [x] T020 [US1] Wire synchronous `HttpModelConverter.ConvertAsync` in `app/backend/Program.cs` after IFC persist; update project status `Converting` → `Ready`/`Failed`
+- [x] T021 [US1] Enforce mandatory USDZ in `app/backend/Program.cs` — call `MarkFailed` if `model.usdz` missing or zero bytes (no GLB-only fallback)
+- [x] T022 [US1] Update `app/backend/Dockerfile` to set `DATA_ROOT=/data`, mount-compatible with converter volume
+- [x] T023 [P] [US1] Update `app/converter/converter_service.py` response contract to return `{ glbPath, usdzPath, thumbnailPath, durationMs }` per `contracts/openapi.md`
 
-**Checkpoint**: US1 is fully functional. You can upload an IFC, watch it convert, and get a public URL + QR.
+**Checkpoint**: Upload end-to-end works; GLB + USDZ gerados localmente
 
 ---
 
-## Phase 4: User Story 2 — Client opens the public link and views the 3D model (Priority: P1)
+## Phase 4: User Story 2 — Entrega Direta de Arquivos + Share + QR (Priority: P1)
 
-**Goal**: An unauthenticated client opens a public URL, sees a thumbnail while the GLB loads, then interacts with the 3D model (orbit / zoom / pan / fullscreen). Status of the underlying project (processing / not-found) is shown gracefully.
+**Goal**: Assets servidos via `GET /files/{projectId}/...` sem redirect; Share API retorna URLs same-origin absolutas
 
-**Independent Test**: Hit `GET /api/share/{token}` (no auth) in incognito, then load the public page in a real browser. The `<model-viewer>` element renders; orbit/zoom/pan/fullscreen all work; thumbnail is visible before the GLB; "not found" / "still processing" branches render correctly.
+**Independent Test**: `curl -sI /files/{id}/model.usdz` → `200`, `Content-Type: model/vnd.usdz+zip`, sem header `Location`
 
-### Tests for User Story 2 ⚠️
+### Tests for User Story 2
 
-- [X] T046 [P] [US2] Integration test public endpoint in `app/tests/backend/Integration/PublicShareEndpointTests.cs`: known token returns `PublicShareDto` with `glbUrl` + `thumbnailUrl` (presigned); unknown token returns 404; project in `Processing` returns 404 (no preview yet)
-- [X] T047 [P] [US2] Contract test `PublicShareDto` in `app/tests/backend/Contract/PublicShareContractTests.cs`: response contains ONLY `name`, `clientLabel`, `status`, `glbUrl`, `thumbnailUrl` — assert zero leakage of `id`, `ownerId`, `errorMessage`, `createdAt`, `updatedAt` (FR-025)
-- [X] T048 [P] [US2] Frontend unit test `<SharePage>` in `app/tests/frontend/Unit/SharePage.test.tsx`: renders `<model-viewer>` with `src`, `poster`, `ar`, `ar-modes="webxr scene-viewer quick-look"`, `camera-controls`, `autoplay`; renders thumbnail before GLB loads; renders "not found" on 404; renders "processing" on `status === 'processing'`
-- [X] T049 [P] [US2] Frontend unit test `<ModelViewer>` wrapper in `app/tests/frontend/Unit/ModelViewer.test.tsx`: forwards props, hides AR button when `isArCapable === false` (FR-019)
-- [X] T050 [P] [US2] E2E test public page in `app/tests/frontend/E2E/public-page.spec.ts` (Playwright): boot the full docker-compose, create+upload+publish a sample project, open `/s/{token}` in a headless Chromium with a UA-string spoofed Android, assert `<model-viewer>` element exists and has `ar` attribute, take a screenshot
+- [x] T024 [P] [US2] Create `app/tests/backend/Integration/FileServingTests.cs` — assert GLB/USDZ Content-Type, `Accept-Ranges` on GLB, no `Location` header, 404 for unknown id
 
 ### Implementation for User Story 2
 
-- [X] T051 [P] [US2] Create `PublicShareHandler` in `app/backend/Application/Sharing/PublicShareHandler.cs`: looks up `ShareLink` by `PublicToken`; returns 404 if missing or if project is not in `Published`; otherwise returns `PublicShareDto` with presigned `glbUrl` and `thumbnailUrl`
-- [X] T052 [P] [US2] Create `PublicShareEndpoints` in `app/backend/Api/Endpoints/PublicShareEndpoints.cs` with `GET /api/share/{token}` (anonymous, per `contracts/openapi.md §GET /api/share/{token}`)
-- [X] T053 [P] [US2] Create `<ModelViewer>` component in `app/frontend/src/components/ModelViewer.tsx`: a typed React wrapper for `<model-viewer>` accepting `glbUrl`, `thumbnailUrl`, `isArCapable` props; renders the `ar-modes="webxr scene-viewer quick-look"` attributes; hides the AR button via CSS when `!isArCapable`
-- [X] T054 [P] [US2] Create `<StatusBadge>` component in `app/frontend/src/components/StatusBadge.tsx`: maps `ProjectStatus` to a colour label using kebab-case spec names (`upload-received`, `processing`, `ready-to-publish`, `published`, `failed`)
-- [X] T055 [US2] Rewrite `<SharePage>` in `app/frontend/src/pages/SharePage.tsx`: fetch `/api/share/{token}`, render `<ModelViewer>` with the returned URLs, show `<StatusBadge>` while loading, show "still processing" if backend returns 404 due to non-`Published` status (try fetching project state via a secondary endpoint if needed), show "not found" page on 404; remove the OG `og:title` "BIM Project" fallback (depends on T051, T053)
-- [X] T056 [US2] Update `app/frontend/src/App.tsx` routes: `/s/:token` → `SharePage`; add a `*` route → `<NotFoundPage>` (US-2 AC-5)
-- [X] T057 [US2] Update `app/frontend/src/index.html`: change `<title>` from "Arch3DAR - BIM 3D Viewer" to "Arch3DAR" (FR-031)
-- [X] T058 [P] [US2] Update `app/frontend/src/api/client.ts`: add `getPublicShare(token)` (no auth header); ensure `X-Correlation-Id` is attached to every request (generate one client-side if absent; FR-027)
-- [X] T059 [P] [US2] Update `app/frontend/vite.config.ts` and `app/frontend/nginx.conf`: ensure `/s/:token` is a frontend route (not proxied to backend); `/api/share/:token` is proxied to backend
+- [x] T025 [US2] Implement `GET /files/{projectId}/model.glb` in `app/backend/Program.cs` using `Results.File()` + `LocalFileStorage.ResolvePath`
+- [x] T026 [P] [US2] Implement `GET /files/{projectId}/model.usdz` in `app/backend/Program.cs` with `model/vnd.usdz+zip`
+- [x] T027 [P] [US2] Implement `GET /files/{projectId}/thumbnail.png` in `app/backend/Program.cs`
+- [x] T028 [US2] Update `GET /share/{token}` in `app/backend/Program.cs` to return absolute same-origin URLs (`{PUBLIC_BASE_URL}/files/{id}/model.glb`) — no presigned MinIO URLs
+- [x] T029 [US2] Register `ModelContentTypeMiddleware` in `app/backend/Program.cs` before file-serving routes
+- [x] T030 [US2] Remove MinIO upstream and `/glb-files/`, `/thumbnails/` locations from `app/nginx/nginx.conf`; add `location /files/` → `proxy_pass http://backend/files/` with `proxy_redirect off`
+- [x] T031 [P] [US2] Ensure `GET /share/{token}/qr` in `app/backend/Program.cs` returns SVG QR pointing to `{PUBLIC_BASE_URL}/s/{token}`
 
-**Checkpoint**: A client can open a shared link with no auth and view the 3D model end-to-end.
+**Checkpoint**: curl downloads GLB/USDZ directly; share JSON has no minio hostnames
 
 ---
 
-## Phase 5: User Story 3 — Client places the model in their real environment via AR (Priority: P1)
+## Phase 5: User Story 3 — Visualização Web 3D (Priority: P1)
 
-**Goal**: On a mobile device, the client taps an "Open in AR" button on the public page and the system launches the device's native AR experience (Scene Viewer on Android, Quick Look on iOS) at real-world scale. On non-AR devices, the button is hidden or disabled and the 3D viewer remains functional.
+**Goal**: Cliente abre `/s/{token}` e vê thumbnail + modelo 3D interativo (orbit, zoom, pan)
 
-**Independent Test**: On Android Chrome with ARCore, tap AR → Scene Viewer launches. On iOS Safari, the AR button hands off to Quick Look. On desktop Chrome, no AR button is shown.
+**Independent Test**: Abrir link público no browser — `<model-viewer>` carrega GLB, poster mostra thumbnail, controles funcionam
 
-### Tests for User Story 3 ⚠️
+### Tests for User Story 3
 
-- [X] T060 [P] [US3] E2E test AR handoff in `app/tests/frontend/E2E/ar-handoff.spec.ts` (Playwright): boot full stack, publish a project, open `/s/{token}` with an Android UA spoof, assert `<model-viewer ar>` attribute present and `ar-modes` contains `scene-viewer` and `quick-look`
-- [X] T061 [P] [US3] Frontend unit test AR capability detection in `app/tests/frontend/Unit/ModelViewer.test.tsx`: when `navigator.userAgent` contains "Android" → `isArCapable = true`; when "iPhone" / "iPad" → `isArCapable = true`; when "Macintosh" with `!X…` UA → `isArCapable = false`; default `false` for unknown UAs (FR-019 graceful degradation)
+- [x] T032 [P] [US3] Update `app/frontend/src/__tests__/SharePage.test.tsx` — mock share API, assert `<model-viewer>` renders with `src` and `poster`
+- [x] T033 [P] [US3] Skipped — `adminBoundary.test.ts` not present; routes already limited to HomePage + SharePage
 
 ### Implementation for User Story 3
 
-- [X] T062 [US3] Implement `useArCapability` hook in `app/frontend/src/auth/useArCapability.ts`: returns `true` on Android or iOS UA, `false` otherwise; SSR-safe (defaults to `false` until `useEffect`)
-- [X] T063 [US3] Wire AR capability into `<ModelViewer>` in `app/frontend/src/components/ModelViewer.tsx`: if `!isArCapable` hide the inner model-viewer element's AR button by setting `ar="false"` (or omitting the `ar` attribute); if `isArCapable` render with the full `ar-modes="webxr scene-viewer quick-look"` (depends on T062)
-- [X] T064 [US3] Add an HTTPS-required banner in `<SharePage>` in `app/frontend/src/pages/SharePage.tsx`: if `window.location.protocol === 'http:'` and `isArCapable`, render a non-blocking notice ("AR requires HTTPS — use a secure URL to launch AR")
-- [X] T065 [P] [US3] (Optional, non-MVP) Add `<a rel="ar" href="…usdz…">` fallback in `<SharePage>` for iOS Quick Look when a USDZ companion is available; skip if absent (post-MVP USDZ generation is out of scope per `research.md §R-06`)
+- [x] T034 [US3] Update `app/frontend/src/pages/HomePage.tsx` (upload) to `POST /upload` and navigate to `/s/{token}` on success
+- [x] T035 [US3] Simplify `app/frontend/src/App.tsx` routes to `/` (HomePage/upload) and `/s/:token` (SharePage) only; remove dashboard/login routes
+- [x] T036 [P] [US3] Delete or stub unused pages: `app/frontend/src/pages/DashboardPage.tsx`, `app/frontend/src/pages/ProjectDetailPage.tsx`, `app/frontend/src/pages/UploadPage.tsx` if superseded by HomePage
+- [x] T037 [US3] Update `app/frontend/vite.config.ts` dev proxy for `/upload`, `/share/`, `/files/` → backend
+- [x] T038 [US3] Verify `app/frontend/src/pages/SharePage.tsx` uses share API `glbUrl`/`thumbnailUrl` and shows loading/not-found states
 
-**Checkpoint**: AR handoff works on Android; iOS handoff is wired (USDZ companion out of scope for MVP); no-AR devices degrade gracefully.
+**Checkpoint**: Web viewer works desktop and mobile browser without AR
 
 ---
 
-## Phase 6: User Story 4 — Architect manages projects from a dashboard (Priority: P2)
+## Phase 6: User Story 4 — AR Android + iPhone Quick Look (Priority: P1)
 
-**Goal**: Authenticated users can sign in to a dashboard that lists their projects, create new ones, upload a file with progress, see status, open a project detail with thumbnail + status + generated assets, and trigger publishing from a share dialog showing the QR code inline + a copy-to-clipboard button.
+**Goal**: AR funciona em Android (Scene Viewer) e iPhone (Quick Look) via `ios-src` + USDZ válido + HTTPS
 
-**Independent Test**: Log in, see the dashboard list, create + upload a new project, see the status badge transition from `upload-received` → `processing` → `ready-to-publish`, open the detail, click publish, see a share dialog with the QR code image and the public URL, copy the URL to clipboard.
+**Independent Test**: Manual checklist quickstart §6 — iPhone Quick Look abre sem "Object could not be opened"
 
-### Tests for User Story 4 ⚠️
+### Tests for User Story 4
 
-- [X] T066 [P] [US4] Frontend unit test `<UploadPage>` in `app/tests/frontend/Unit/UploadPage.test.tsx`: renders `name`, `description`, `clientLabel` fields; rejects non-`.ifc` files client-side; shows progress indicator while uploading; switches to "processing" state on 201 response; shows server error on 4xx
-- [X] T067 [P] [US4] Frontend unit test `<DashboardPage>` (list) in `app/tests/frontend/Unit/DashboardPage.test.tsx`: renders project list with name, date, status badge, thumbnail; filters by status when `?status=…` present
-- [X] T068 [P] [US4] Frontend unit test `<ProjectDetailPage>` in `app/tests/frontend/Unit/ProjectDetailPage.test.tsx`: shows thumbnail + status + "Publish" button when `ready-to-publish`; shows error reason when `failed`; does NOT embed `<ModelViewer>` (admin page is for management only — viewing is on the public SharePage)
-- [X] T069 [P] [US4] Frontend unit test `<ShareDialog>` in `app/tests/frontend/Unit/ShareDialog.test.tsx`: renders the QR PNG image, the public URL with a "Copy" button that writes to the clipboard mock
+- [x] T039 [P] [US4] Create `app/frontend/src/__tests__/ModelViewerAr.test.tsx` — assert `ios-src` attribute set when `usdzUrl` provided; `ar-modes` includes `quick-look` first
 
 ### Implementation for User Story 4
 
-- [X] T070 [P] [US4] Create `<DropZone>` component in `app/frontend/src/components/DropZone.tsx`: drag-and-drop + click-to-pick, accepts only `.ifc`, validates size client-side, emits `onSelect(File)` with progress events
-- [X] T071 [P] [US4] Create `<ShareDialog>` component in `app/frontend/src/components/ShareDialog.tsx`: modal showing QR PNG, public URL with copy-to-clipboard, "Close" button; opens via `open={true}` prop
-- [X] T072 [P] [US4] Create `<DashboardPage>` in `app/frontend/src/pages/DashboardPage.tsx`: list view with `<StatusBadge>`, thumbnail, name, date; "New project" button → `/upload`; "View" → `/projects/{id}`; "Share" → opens `<ShareDialog>` after `publishProject(id)`
-- [X] T073 [P] [US4] Create `<ProjectDetailPage>` in `app/frontend/src/pages/ProjectDetailPage.tsx`: shows thumbnail, status, error reason if failed, "Publish" button (calls `publishProject(id)` then opens `<ShareDialog>`), "Show share link" button for published projects; does NOT embed `<ModelViewer>` (admin page is for management only — viewing is on the public SharePage)
-- [X] T074 [P] [US4] Create `<UploadPage>` in `app/frontend/src/pages/UploadPage.tsx`: form with `name`, `description`, `clientLabel` fields + `<DropZone>`; submits via `createProject(...)` (multipart); shows progress; on 201 navigates to `/projects/{id}`
-- [X] T075 [P] [US4] Create `<LoginPage>` in `app/frontend/src/pages/LoginPage.tsx` + `<RegisterPage>` in `app/frontend/src/pages/RegisterPage.tsx`: form posts to `/auth/login` / `/auth/register`; on success, navigates to `/`
-- [X] T076 [US4] Update `app/frontend/src/api/client.ts`: add `createProject(formData)`, `getProject(id)`, `listProjects(opts)`, `publishProject(id)` wrappers; ensure `X-Correlation-Id` is sent on every request
-- [X] T077 [US4] Update `app/frontend/src/App.tsx` routes: `/` → `DashboardPage`, `/upload` → `UploadPage`, `/projects/:id` → `ProjectDetailPage`, `/login` → `LoginPage`, `/register` → `RegisterPage`; add a protected-route wrapper that redirects to `/login` if `/api/projects` returns 401
-- [X] T078 [US4] Add `app/frontend/src/auth/useCurrentUser.ts`: a small hook that returns the current user (or `null`); backed by a one-time `GET /api/me` endpoint or a `/auth/me` Identity-style endpoint
+- [x] T040 [US4] Update `app/frontend/src/pages/SharePage.tsx` — `ios-src={usdzUrl}`, `ar-modes="quick-look scene-viewer webxr"`, `auto-rotate`, `camera-controls`, `shadow-intensity="1"`, `exposure="1"`
+- [x] T041 [US4] Hide or disable AR affordance in `app/frontend/src/pages/SharePage.tsx` when `usdzUrl` is null; keep 3D viewer as fallback
+- [x] T042 [US4] Show HTTPS-required banner in `app/frontend/src/pages/SharePage.tsx` when `window.location.protocol !== 'https:'`
+- [x] T043 [US4] Configure `PUBLIC_BASE_URL` as HTTPS in `app/docker-compose.yml` and `app/.env.example` for production AR testing
+- [x] T044 [US4] Add `types` for `model.usdz` and `model/gltf-binary` in `app/nginx/nginx.conf` `mime.types` include or explicit `types` block if needed
+- [x] T045 [P] [US4] Remove dead AR code from `app/frontend/src/components/ModelViewer.tsx` if SharePage is the sole viewer; ensure no admin imports
 
-**Checkpoint**: The architect can manage projects end-to-end from the dashboard.
+**Checkpoint**: AR manual test passes on Android Chrome and iOS Safari over HTTPS
 
 ---
 
-## Phase 7: User Story 5 — Multi-tenancy / data isolation (Priority: P3)
+## Phase 7: Polish & Cross-Cutting Concerns
 
-**Goal**: Projects, files, and public links are scoped to a tenant (the architect's account). One tenant cannot see or modify another tenant's data. Public links expose only what is strictly necessary — no internal IDs, no tenant metadata.
+**Purpose**: Cleanup, validação final, zero MinIO
 
-**Independent Test**: Create two users. As user A, create+publish a project. As user B, attempt `GET /api/projects/{A's project id}` → 404. As user B, attempt to guess A's `publicToken` 1,000,000 times → 0 hits. The public page response from A's token contains no `id`, `ownerId`, or `errorMessage`.
-
-### Tests for User Story 5 ⚠️
-
-- [X] T079 [P] [US5] Integration test cross-tenant isolation in `app/tests/backend/Integration/TenantIsolationTests.cs`: register two users, create+publish a project as user A, attempt `GET /api/projects/{A's id}` as user B → 404; attempt `POST /api/projects/{A's id}/publish` as user B → 404; attempt `GET /api/share/{A's publicToken}` as user B → 200 (public, anonymous) but `GET /api/projects/{A's id}` as user B → 404 (private)
-- [X] T080 [P] [US5] Integration test unguessable tokens in `app/tests/backend/Integration/TokenUnguessabilityTests.cs`: hit `GET /api/share/{random-guid}` 10,000 times, assert all 10,000 return 404 (SC-005; the unique index on `PublicToken` ensures O(1) lookup)
-- [X] T081 [P] [US5] Integration test public-page no-leak in `app/tests/backend/Integration/PublicShareNoLeakTests.cs`: parse the response of `GET /api/share/{token}` and assert the JSON has ONLY `name`, `clientLabel`, `status`, `glbUrl`, `thumbnailUrl` keys — fail on any other key (FR-025)
-- [X] T082 [P] [US5] Contract test for tenant scoping in `app/tests/backend/Contract/TenantScopingContractTests.cs`: assert `GET /api/projects` returns only the calling user's projects (zero cross-tenant items in `items`)
-
-### Implementation for User Story 5
-
-- [X] T083 [US5] Add a global query filter in `app/backend/Infrastructure/AppDbContext.cs` on `Project` and `ShareLink`: `e => e.OwnerId == _currentUserId` (or `Project.OwnerId` for `ShareLink`); inject `ICurrentUser` to read the current user id
-- [X] T084 [US5] Add `ICurrentUser` interface in `app/backend/Application/Abstractions/ICurrentUser.cs` with `Guid Id { get; }`; implement in `app/backend/Infrastructure/CurrentUser.cs` reading `HttpContext.User`
-- [X] T085 [P] [US5] Add a `GET /api/me` endpoint in `app/backend/Api/Endpoints/AuthEndpoints.cs` returning `{ "id": "...", "email": "..." }`; gated by `[Authorize]`
-- [X] T086 [P] [US5] Update `PublishProjectHandler` and `GetProjectHandler` to confirm cross-tenant lookups return 404 (not 403); tests in T079 enforce this
-- [X] T087 [P] [US5] Update `PublicShareHandler` to drop the `Metadata` block from any future expanded response — already absent in `contracts/openapi.md §GET /api/share/{token}`
-
-**Checkpoint**: Tenants are isolated; public pages leak nothing.
-
----
-
-## Phase 8: Polish & Cross-Cutting Concerns
-
-**Purpose**: Spec compliance, repo hygiene, observability, and the e2e validation per `quickstart.md`. Affects multiple stories.
-
-- [X] T088 [P] Rewrite `app/README.md` removing all "BIM platform", "BIM collaboration", "BIM coordination", "BIM metadata", "BIM management", "BIM engineering" wording per FR-031 and SC-008; describe the product as "3D model sharing for architecture, interiors, and custom furniture"
-- [X] T089 [P] Remove dead BIM components: delete `app/frontend/src/components/PropertiesPanel.tsx` and `app/frontend/src/components/SpatialTree.tsx` (FR-020 forbids them; their only consumer is the to-be-rewritten `ViewerPage`); remove the click-to-pick raycaster code in `app/frontend/src/pages/ViewerPage.tsx` (lines 33-36, 147-200) and the `selectedElement` state
-- [X] T090 [P] Remove stale CSS classes from `app/frontend/src/App.css`: `.tree-item`, `.tree-children`, `.property-row`, `.property-label`, `.property-value`, `.viewer-panel`, `.panel-header`, `.panel-content`, `.panel-toggle`, `.badge-uploaded`, `.badge-queued`, `.badge-completed` (replaced by the new status names)
-- [X] T091 [P] Drop unused dependencies from `app/frontend/package.json`: `three`, `@types/three` (no longer imported after T089)
-- [X] T092 [P] Remove `app/.env` and `app/backend/.env` from git tracking (`git rm --cached`); add `.env` to top-level `.gitignore` (the file contains default creds — `arch3dar_secret` / `minioadmin`; security risk)
-- [X] T093 [P] Switch `app/converter/converter_service.py` to JSON structured logging with `correlation_id` field; emit the same correlation id read from the row's `correlation_id` column (set by the backend at upload time)
-- [X] T094 [P] Switch `app/backend/Api/Program.cs` `Database.Migrate()` call site to a startup hosted service so migrations run before `app.Run()` returns (graceful startup ordering; replaces any `EnsureCreated()` remnants)
-- [X] T095 [P] Add `GET /api/me` rate limiting (1 req/s per IP) and a basic CORS allow-list from `CORS_ALLOWED_ORIGINS` env (defaults to `http://localhost:3000`); reject all other origins in dev
-- [X] T096 [P] Add Serilog enrichment: `ProjectId`, `OwnerId`, `PublicToken` (only for share endpoints) pushed into `LogContext` per request via a custom middleware that runs after `CorrelationIdMiddleware`
-- [X] T097 [P] Wire `dotnet ef migrations bundle` or a `migrate-on-startup` so a fresh `docker compose up` brings a fresh DB up to head (no manual `dotnet ef database update` step in `quickstart.md` step 0)
-- [X] T098 [P] Add a Makefile `app/Makefile` with targets `make up`, `make down`, `make logs`, `make test-backend`, `make test-frontend`, `make e2e`, `make audit-bim` (the last one greps for forbidden terms and exits 1 on hits; supports SC-008 verification)
-- [X] T099 [P] Add `app/frontend/src/pages/NotFoundPage.tsx`: a friendly "we couldn't find that project" page used by the `*` route (US-2 AC-5)
-- [X] T100 Run the full `quickstart.md` validation end-to-end on a clean clone; verify all 17 acceptance-criteria checkboxes from `quickstart.md §What "done" looks like` pass; verify `make audit-bim` returns zero hits
-- [X] T101 Final review: confirm every file path in this `tasks.md` exists in the final tree; remove any task whose target file was deleted; commit
+- [x] T046 [P] Remove `app/frontend/src/auth/useCurrentUser.ts`, `app/frontend/src/api/client.ts` auth helpers, and unused components (`ShareDialog.tsx`, `StatusBadge.tsx`) if no longer referenced
+- [x] T047 [P] Update `app/tests/backend/Unit/ProjectStateTransitionTests.cs` for `Uploading`/`Converting`/`Ready`/`Failed` states
+- [x] T048 Run `make test-backend` and fix failures in `app/tests/backend/` (net10.0; 10/10 passing)
+- [x] T049 [P] Run `make test-frontend` and fix failures in `app/frontend/src/__tests__/`
+- [ ] T050 Run quickstart validation scenarios §0–§4 from `specs/001-ifc-mvp-platform/quickstart.md` (boot, upload, disk check, curl MIME)
+- [x] T051 [P] Grep entire `app/` for `minio`, `MinIO`, `presign`, `S3` — remove or document any remaining references
+- [x] T052 Run `make audit-bim` to confirm FR-031/SC-008 compliance in user-facing surfaces
+- [ ] T053 Complete manual AR checklist in `specs/001-ifc-mvp-platform/quickstart.md` §6 on real Android + iPhone devices
 
 ---
 
@@ -244,125 +171,80 @@ Web application layout (per `plan.md` and the constitution's `app/{backend,front
 
 ### Phase Dependencies
 
-- **Setup (Phase 1)**: No dependencies — can start immediately. T001 → T011 are all independent.
-- **Foundational (Phase 2)**: Depends on Setup completion. T012–T030 BLOCKS all user stories. T012, T013, T014, T015, T016, T017, T018, T019, T020 can run in parallel; T021–T024 depend on the Domain/Application/Infrastructure work; T025–T030 can run in parallel with the backend work.
-- **User Stories (Phase 3–7)**: All depend on Foundational phase completion. They can proceed in parallel (if staffed) or sequentially in priority order (P1×3 → P2 → P3).
-- **Polish (Phase 8)**: Depends on all user stories being complete.
+```text
+Phase 1 (Setup)
+    ↓
+Phase 2 (Foundational) — BLOCKS all stories
+    ↓
+Phase 3 (US1: Upload+Convert) — required before US2 file serving has data
+    ↓
+Phase 4 (US2: File serving) — required before US3/US4 can load assets
+    ↓
+Phase 5 (US3: Web viewer) ─┐
+    ↓                      ├→ can overlap once US2 complete
+Phase 6 (US4: AR) ─────────┘
+    ↓
+Phase 7 (Polish)
+```
 
 ### User Story Dependencies
 
-- **US1 (P1)**: Depends on Phase 2 only. No dependencies on other stories.
-- **US2 (P1)**: Depends on Phase 2 only. Reads the GLB/thumbnail that US1 produces, but is independently testable: a manually inserted `ShareLink` + a presigned GLB key in MinIO is enough.
-- **US3 (P1)**: Depends on Phase 2 only AND on the `<ModelViewer>` from US2. The AR capability hook (T062) is independent; the wiring into `<ModelViewer>` (T063) requires T053.
-- **US4 (P2)**: Depends on Phase 2 AND on US1 (uses `createProject`, `publishProject`). Independently testable by mocking the API client.
-- **US5 (P3)**: Depends on Phase 2 AND on US1 (publish endpoint creates the `ShareLink` it tests). Independently testable once the auth + global query filter exist.
-
-### Within Each User Story
-
-1. Tests (T031–T036 for US1, T046–T050 for US2, T060–T061 for US3, T066–T069 for US4, T079–T082 for US5) MUST be written first and confirmed to FAIL before implementation.
-2. Domain/Application code (handlers, validators, DTOs) before API endpoints.
-3. API endpoints before frontend consumers.
-4. Each story's checkpoint is verified before moving on.
+- **US1** → **US2**: files must exist before serving endpoints matter
+- **US2** → **US3/US4**: viewer and AR need same-origin `/files/` URLs
+- **US3** and **US4** can proceed in parallel after US2 (different files: SharePage web vs AR attrs)
 
 ### Parallel Opportunities
 
-- **Phase 1**: T002, T003, T004, T005, T006, T007, T008, T009, T010, T011 are all `[P]` and can run in parallel.
-- **Phase 2**: T013, T014, T015, T016, T017, T018, T019, T020 are `[P]`. T025, T026, T027, T028, T029, T030 are `[P]` (separate test/converter/docker scope).
-- **Across user stories**: Once Phase 2 completes, the five user stories can run in parallel with five developers. Within each story, all `[P]` test/model/service tasks can run in parallel.
-- **Polish phase**: T088, T089, T090, T091, T092, T093, T095, T096, T097, T098, T099 are `[P]`.
+**Phase 1** (all [P]): T002, T003, T004, T005, T006 in parallel after T001
+
+**Phase 2**: T008 parallel with T007; T012/T013 parallel with backend tasks after T007
+
+**Phase 3**: T017, T018 parallel; T023 parallel with T019–T022
+
+**Phase 4**: T024 parallel with prep; T026, T027, T031 parallel after T025
+
+**Phase 5–6**: Frontend test tasks [P]; US3 and US4 frontend edits are mostly sequential on `SharePage.tsx` — coordinate to avoid conflicts
 
 ---
 
-## Parallel Example: User Story 1
+## Parallel Example: User Story 2
 
 ```bash
-# Launch all tests for US1 together (T031–T036 are [P]):
-Task: "T031 [P] [US1] Unit test Project.TransitionTo in app/tests/backend/Unit/ProjectStateTransitionTests.cs"
-Task: "T032 [P] [US1] Unit test publish idempotency in app/tests/backend/Unit/PublishProjectHandlerTests.cs"
-Task: "T033 [P] [US1] Integration test upload+convert+publish in app/tests/backend/Integration/ProjectLifecycleTests.cs"
-Task: "T034 [P] [US1] Integration test upload validation in app/tests/backend/Integration/UploadValidationTests.cs"
-Task: "T035 [P] [US1] Integration test conversion failure in app/tests/backend/Integration/ConversionFailureTests.cs"
-Task: "T036 [P] [US1] Contract test POST /api/projects in app/tests/backend/Contract/CreateProjectContractTests.cs"
-
-# Launch all handlers/validators for US1 together (T037–T042 are [P]):
-Task: "T037 [P] [US1] CreateProjectHandler in app/backend/Application/Projects/Commands/CreateProjectHandler.cs"
-Task: "T038 [P] [US1] CreateProjectValidator in app/backend/Application/Projects/Validators/CreateProjectValidator.cs"
-Task: "T039 [P] [US1] PublishProjectHandler in app/backend/Application/Projects/Commands/PublishProjectHandler.cs"
-Task: "T040 [P] [US1] PublishProjectValidator in app/backend/Application/Projects/Validators/PublishProjectValidator.cs"
-Task: "T041 [P] [US1] GetProjectHandler in app/backend/Application/Projects/Queries/GetProjectHandler.cs"
-Task: "T042 [P] [US1] ListProjectsHandler in app/backend/Application/Projects/Queries/ListProjectsHandler.cs"
+# After T025 lands, launch in parallel:
+Task T026: "Implement GET /files/{projectId}/model.usdz in app/backend/Program.cs"
+Task T027: "Implement GET /files/{projectId}/thumbnail.png in app/backend/Program.cs"
+Task T031: "Ensure GET /share/{token}/qr in app/backend/Program.cs"
 ```
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (User Stories 1 + 2 + 3 — all P1)
+### MVP First (US1 + US2)
 
-The MVP is **all three P1 stories together**: an architect publishes a project (US1), the client opens the public link and views the 3D model (US2), and the client opens it in AR (US3). Without all three, the product is incomplete. A single-client demo end-to-end is the bar.
-
-1. Complete Phase 1: Setup (T001–T011)
-2. Complete Phase 2: Foundational (T012–T030)
-3. Complete Phase 3: US1 — upload + convert + publish (T031–T045)
-4. Complete Phase 4: US2 — public 3D viewing (T046–T059)
-5. Complete Phase 5: US3 — AR handoff (T060–T065)
-6. **STOP and VALIDATE**: run `quickstart.md` steps 1–9 on a clean clone. All P1 acceptance criteria pass. **MVP ready.**
+1. Complete Phase 1 + Phase 2
+2. Complete Phase 3 (US1) — upload produces GLB + USDZ on disk
+3. Complete Phase 4 (US2) — files downloadable with correct MIME
+4. **STOP and VALIDATE**: quickstart §1–§4 via curl
 
 ### Incremental Delivery
 
-1. Setup + Foundational → Foundation ready (T001–T030)
-2. Add US1 → independently testable; client can see a public link but no 3D model yet
-3. Add US2 → client can view the 3D model on the public page
-4. Add US3 → client can launch AR (MVP complete)
-5. Add US4 (P2) → architect has a real dashboard UX
-6. Add US5 (P3) → multi-tenant isolation hardened
-7. Polish (Phase 8) → repo hygiene + spec compliance + final validation
+1. US1 + US2 → backend pipeline complete (no UI needed for curl validation)
+2. Add US3 → web viewer demo
+3. Add US4 → AR on real devices over HTTPS
+4. Phase 7 → production-ready cleanup
 
-### Parallel Team Strategy
+### Suggested MVP Scope
 
-With three developers:
-
-1. Team completes Setup + Foundational together (T001–T030)
-2. Once Foundational is done:
-   - **Developer A**: US1 (P1) — backend, conversion, publish (T031–T045)
-   - **Developer B**: US2 (P1) — public page, viewer wrapper (T046–T059) — can mock the API until A finishes
-   - **Developer C**: US4 (P2) — dashboard, upload form (T066–T078) — can mock the API
-3. After US1 ships, US3 (T060–T065) is a 1-day wiring job (AR handoff) and US5 (T079–T087) is a 1-day hardening pass
-4. Polish (Phase 8) is a 1–2 day final pass by anyone
-
----
-
-## Phase 9: Bundle Hygiene & Route Boundary (Post-MVP Hardening)
-
-**Purpose**: Codify and guard the route boundary between admin and public share pages. The single SPA correctly lazy-loads `SharePage` so `@google/model-viewer` is excluded from the admin entry chunk, but no test guarded this — a future regression (e.g. someone importing `ModelViewer` from a `ProjectDetailPage` panel) would re-leak ~hundreds of KB of unused JS to dashboard users and quietly violate the MVP's "admin is for management, not viewing" rule. This phase adds a static-import canary and a constitution clause that together make the boundary enforceable in CI.
-
-**Origin**: User refactor request, 2026-06-10. Two of the original five claims (admin importing `ModelViewer`, `glbPresignedUrl = thumbnailUrl`) were already false in code; the real issue was bundle hygiene and the absence of a regression guard. Pipeline work (IFC→GLB and GLB→USDZ) is out of scope and tracked separately.
-
-- [X] T102 [P] Create static-import canary test in `app/frontend/src/__tests__/adminBoundary.test.ts`: uses Vite's `import.meta.glob('../pages/*.tsx', { query: '?raw', import: 'default', eager: true })` to read each admin page source as a string at test time; asserts none of `DashboardPage.tsx`, `ProjectDetailPage.tsx`, `UploadPage.tsx`, `NotFoundPage.tsx` contain any of these patterns: `from '../components/ModelViewer'`, `from '../auth/useArCapability'`, `from '@google/model-viewer'`, `<model-viewer`. Uses `it.each(ADMIN_FILES)` for one assertion per file. No new npm dependencies.
-- [X] T103 Amend `.specify/memory/constitution.md` from v1.0.0 → v1.1.0 (MINOR: new section, no principle removals). Added section "Route Boundary: Admin vs. Public Share" enumerating the forbidden imports, listing the four admin page files, and pointing at `adminBoundary.test.ts` as the enforcement mechanism. Bumped version, last-amended date, sync-impact report, and amendment log per the constitution's own governance procedure (constitution §Governance → §Versioning Policy).
-- [X] T104 [P] Verify the bundle boundary holds: run `npm run build` in `app/frontend/`, then `rg -l 'model-viewer|@google' app/frontend/dist/assets/` — assert only `SharePage-*.js` matches and no admin chunk (`DashboardPage-*.js`, `ProjectDetailPage-*.js`, `UploadPage-*.js`, `NotFoundPage-*.js`, `index-*.js`) contains `model-viewer` strings. Run `npm test` to confirm the canary passes (5 files, 14 tests including the 4 new admin-boundary cases). Run `npx tsc --noEmit` and `npm run lint` — both clean.
-- [ ] T105 Commit the refactor: stage `.specify/memory/constitution.md` and `app/frontend/src/__tests__/adminBoundary.test.ts` with a message such as `chore(frontend): guard admin/share route boundary with static canary + constitution v1.1.0`. Reference this Phase 9 in the body. Do **not** run this task without explicit user authorization per the AGENTS rule on commits.
-
-**Out of scope (filed separately)**:
-- IFC → GLB pipeline reliability on `app/converter/converter_service.py` (no `IfcConvert` shim issues observed, but no end-to-end IFC round-trip has been run against a real `.ifc` file in CI)
-- GLB → USDZ companion generation for iOS Quick Look (already marked optional/non-MVP in T065)
-- Splitting the SPA into two Vite apps (`app/admin/` + `app/share/`) — explicitly rejected as over-engineering relative to the route-lazy split; would also conflict with ADR-001
-
-**Verification**:
-- `npm run lint` → clean
-- `npx tsc --noEmit` → clean
-- `npm test` → 5 files, 14/14 tests pass (4 new admin-boundary cases via `it.each`)
-- `npm run build` → 9 chunks, 555 ms, `model-viewer` only in `dist/assets/SharePage-BPSe2AGb.js`
-- `rg -l 'model-viewer|@google' app/frontend/dist/assets/` → exactly one file: `SharePage-BPSe2AGb.js`
+Minimum shippable correction: **Phase 1 + 2 + 3 + 4** (backend complete). Frontend (US3 + US4) required for acceptance criteria 5–6 (AR on devices).
 
 ---
 
 ## Notes
 
-- `[P]` tasks touch different files and have no intra-phase dependencies. Tasks without `[P]` either depend on earlier tasks in the same phase or are the integration point that wires parallel work together.
-- `[US1]…[US5]` labels map directly to the user stories in `spec.md` §User Scenarios & Testing.
-- Every task has an exact file path. An LLM should be able to start each task without further context.
-- Each user story has its own checkpoint — stop, run the tests, and verify the story works on its own before moving to the next priority.
-- Commit after each task or logical group (the optional `/speckit.git.commit` post-task hook can be invoked per task).
-- T100 is the final integration gate: it is a manual run of `quickstart.md` plus a `make audit-bim` (added in T098) to confirm SC-008.
-- T101 is the final hygiene pass — verify the produced tree matches every path mentioned in this file and remove stale tasks.
+- Total tasks: **53**
+- Per story: Setup 6, Foundational 10, US1 7, US2 8, US3 7, US4 7, Polish 8
+- USDZ failure must fail the whole upload (no silent GLB-only fallback)
+- Never use 302/307/308 for `/files/` routes
+- `PUBLIC_BASE_URL` must be HTTPS for real-device AR tests
+- Commit after each phase checkpoint
