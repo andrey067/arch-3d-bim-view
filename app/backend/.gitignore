@@ -1,0 +1,35 @@
+# .NET build output
+bin/
+obj/
+*.user
+*.suo
+.vs/
+*.userosscache
+*.suo
+*.userprefs
+[Bb]uild[Ll]og.*
+*.[Pp]ublish.xml
+*.pfx
+*.snupkg
+*.nuget.props
+*.nuget.targets
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Tools
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Test results
+TestResults/
+coverage/
+*.coverage
+*.coveragexml
+
+# Environment
+.env
+.env.local
+*.local

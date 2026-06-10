@@ -2,22 +2,22 @@ import { Suspense, lazy } from 'react';
 import { Routes, Route } from 'react-router-dom';
 import './App.css';
 
-const ProjectsPage = lazy(() => import('./pages/ProjectsPage'));
+const DashboardPage = lazy(() => import('./pages/DashboardPage'));
 const UploadPage = lazy(() => import('./pages/UploadPage'));
-const ViewerPage = lazy(() => import('./pages/ViewerPage'));
+const ProjectDetailPage = lazy(() => import('./pages/ProjectDetailPage'));
 const SharePage = lazy(() => import('./pages/SharePage'));
-const ARViewerPage = lazy(() => import('./pages/ARViewerPage'));
+const NotFoundPage = lazy(() => import('./pages/NotFoundPage'));
 
 function App() {
   return (
     <div className="app">
       <Suspense fallback={<div className="loading">Loading...</div>}>
         <Routes>
-          <Route path="/" element={<ProjectsPage />} />
+          <Route path="/" element={<DashboardPage />} />
           <Route path="/upload" element={<UploadPage />} />
-          <Route path="/view/:id" element={<ViewerPage />} />
-          <Route path="/share/:id" element={<SharePage />} />
-          <Route path="/share/:id/ar" element={<ARViewerPage />} />
+          <Route path="/projects/:id" element={<ProjectDetailPage />} />
+          <Route path="/s/:token" element={<SharePage />} />
+          <Route path="*" element={<NotFoundPage />} />
         </Routes>
       </Suspense>
     </div>

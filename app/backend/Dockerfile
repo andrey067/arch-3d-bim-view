@@ -12,4 +12,12 @@ RUN dotnet publish -c Release -o /app/publish
 FROM base AS final
 WORKDIR /app
 COPY --from=build /app/publish .
+
+# Workaround Debian GPG key rotation issue by downloading static curl
+ADD https://github.com/moparisthebest/static-curl/releases/download/v8.4.0/curl-amd64 /usr/bin/curl
+RUN chmod +x /usr/bin/curl
+
+HEALTHCHECK --interval=15s --timeout=3s --start-period=20s --retries=3 \
+  CMD curl --fail http://localhost:5000/health || exit 1
+
 ENTRYPOINT ["dotnet", "Backend.dll"]
