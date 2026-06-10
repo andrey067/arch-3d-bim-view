@@ -251,11 +251,35 @@ app.MapPost("/upload", async (
 }).DisableAntiforgery();
 
 // GET /files/{projectId}/{fileName}
-app.MapGet("/files/{projectId:guid}/{fileName}", (Guid projectId, string fileName, LocalFileStorage storage) =>
+app.MapMethods("/files/{projectId:guid}/{fileName}", new[] { "GET", "HEAD" }, (HttpContext ctx, Guid projectId, string fileName, LocalFileStorage storage) =>
 {
     if (fileName is not (LocalFileStorage.GlbFileName or LocalFileStorage.UsdzFileName or LocalFileStorage.ThumbnailFileName))
     {
         return Results.NotFound();
+    }
+
+    if (HttpMethods.IsHead(ctx.Request.Method))
+    {
+        var headPath = storage.ResolvePath(projectId, fileName);
+        if (!storage.IsInsideDataRoot(headPath) || !File.Exists(headPath))
+        {
+            return Results.NotFound();
+        }
+        var headInfo = new FileInfo(headPath);
+        var headType = fileName switch
+        {
+            LocalFileStorage.GlbFileName => "model/gltf-binary",
+            LocalFileStorage.UsdzFileName => "model/vnd.usdz+zip",
+            LocalFileStorage.ThumbnailFileName => "image/png",
+            _ => "application/octet-stream",
+        };
+        ctx.Response.Headers.ContentLength = headInfo.Length;
+        ctx.Response.Headers.ContentType = headType;
+        if (string.Equals(fileName, LocalFileStorage.GlbFileName, StringComparison.OrdinalIgnoreCase))
+        {
+            ctx.Response.Headers.AcceptRanges = "bytes";
+        }
+        return Results.Empty;
     }
 
     return ServeProjectFile(projectId, fileName, storage);

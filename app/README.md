@@ -18,7 +18,7 @@ Open `https://<your-host>/` to upload an IFC file. You receive a share link and 
 ## Prerequisites
 
 - Docker 24+ and Docker Compose v2
-- TLS certificate for HTTPS (self-signed OK for LAN testing; AR on real phones needs HTTPS)
+- TLS certificate for HTTPS (mkcert recommended — see [iPhone AR setup](#iphone-quick-look-setup) below)
 - 4 GB RAM minimum (8 GB recommended for large IFC files)
 
 ## Architecture
@@ -40,7 +40,7 @@ Open `https://<your-host>/` to upload an IFC file. You receive a share link and 
 
 - **frontend** — React + Vite + `<model-viewer>` (upload + public share page)
 - **backend** — ASP.NET Core 9 API; serves files directly from `/data`
-- **converter** — Python sidecar: IfcConvert → GLB, `usd_from_gltf` → USDZ
+- **converter** — Python sidecar: IFC → GLB → tabletop normalize → USDZ (see [Conversion pipeline](#conversion-pipeline))
 - **postgres** — project metadata (token, status, paths)
 - **nginx** — TLS termination, reverse proxy (no redirects on `/files/`)
 
@@ -81,6 +81,105 @@ Public URLs (same origin, no presigned redirects):
 | GET | `/share/{token}/qr` | QR code SVG |
 | GET | `/health` | Liveness |
 
+## Conversion pipeline
+
+When a user uploads an `.ifc` file, the backend saves it under `/data/projects/{projectId}/`
+and calls the converter sidecar (`POST /convert`). The converter runs a **synchronous**
+five-step pipeline; if any step fails, the project is marked `failed` and the upload
+returns `502`.
+
+```
+IFC bytes
+   │
+   ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 1. IfcConvert (-y)                                           │
+│    original.ifc  →  model.glb                                │
+│    One GLB scene with multiple meshes (walls, slabs, etc.).   │
+│    Each mesh node carries a 4×4 matrix placing it in world   │
+│    coordinates (IfcOpenShell does not merge geometry).         │
+└───────────────────────────┬──────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 2. glb_normalize.py  (AR_MAX_EXTENT_M, default 0.5 m)        │
+│    a) Bake node matrices into vertex positions               │
+│       → keeps IFC parts assembled (fixes “broken” AR model)  │
+│    b) Uniform scale so longest axis = AR_MAX_EXTENT_M          │
+│       → tabletop miniature, not real-world building size     │
+│    c) Lift so min(Y) = 0                                     │
+│       → model rests on detected floor/table surface in AR    │
+│    Overwrites model.glb in place.                            │
+└───────────────────────────┬──────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 3. usd_from_gltf (Google)                                    │
+│    model.glb  →  model.usdz                                  │
+│    Produces Quick Look–compatible USDZ (model.usdc inside zip).│
+│    Failure or empty output → entire conversion fails (422).    │
+└───────────────────────────┬──────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 4. Thumbnail                                                   │
+│    IfcConvert --thumbnail  →  thumbnail.png (fallback: grey) │
+└───────────────────────────┬──────────────────────────────────┘
+                            ▼
+┌──────────────────────────────────────────────────────────────┐
+│ 5. Backend marks project Ready, returns share URL + QR         │
+└──────────────────────────────────────────────────────────────┘
+```
+
+### Why baking node matrices matters
+
+IfcConvert exports each IFC product as a separate glTF node with its own `matrix`
+translation (often tens of metres apart). Scaling only local vertex coordinates
+without applying those matrices causes parts to **fly apart** in AR. `glb_normalize.py`
+multiplies each mesh vertex by its node matrix, then removes the matrix — the
+assembly stays intact.
+
+### Tabletop AR scale (`AR_MAX_EXTENT_M`)
+
+| Value | Effect |
+|-------|--------|
+| `0.5` (default) | Longest side ≈ 50 cm — fits on a coffee table |
+| `0.8` | Slightly larger desk preview |
+| `2.0` | Room-scale (needs physical space) |
+
+Set in `app/.env` or `docker-compose.yml` under the `converter` service. **Re-upload
+the IFC** after changing — existing files on disk are not reprocessed automatically.
+
+### iOS vs Android delivery
+
+| Platform | Asset | How it is loaded |
+|----------|-------|------------------|
+| Web viewer | `model.glb` | `<model-viewer src=…>` |
+| iPhone Quick Look | `model.usdz` | `<model-viewer ios-src=…>` + `<a rel="ar">` fallback |
+| Android Scene Viewer | `model.glb` | `<model-viewer ar-modes="… scene-viewer …">` |
+
+Both GLB and USDZ are served from the same HTTPS origin (`/files/{projectId}/…`)
+with correct MIME types and **no redirects** (required for Quick Look).
+
+### Converter environment variables
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `DATA_ROOT` | `/data` | Shared volume with backend |
+| `IFCCONVERT_PATH` | `/usr/local/bin/IfcConvert` | IfcOpenShell CLI |
+| `USD_FROM_GLTF_PATH` | `/usr/local/bin/usd_from_gltf` | GLB → USDZ |
+| `CONVERSION_TIMEOUT_S` | `120` | Per-step subprocess timeout |
+| `AR_MAX_EXTENT_M` | `0.5` | Tabletop longest-axis size (metres) |
+
+### Manual re-conversion (existing project)
+
+```bash
+PROJECT_ID=<uuid>
+docker exec arch3dar-converter bash -c "
+  DIR=/data/projects/$PROJECT_ID
+  IfcConvert -y \$DIR/original.ifc \$DIR/model.glb
+  python3 -c \"from glb_normalize import normalize_glb_for_ar; normalize_glb_for_ar('\\\$DIR/model.glb', 0.5)\"
+  usd_from_gltf \$DIR/model.glb \$DIR/model.usdz
+"
+```
+
 ## Development
 
 ```bash
@@ -91,3 +190,42 @@ make verify-no-minio
 ```
 
 See `specs/001-ifc-mvp-platform/quickstart.md` for end-to-end validation.
+
+## iPhone Quick Look setup
+
+Quick Look on iOS downloads the USDZ in a separate process. A **CA that the
+iPhone trusts** is required — self-signed certificates cause Quick Look to
+open an empty AR scene. Use [mkcert](https://github.com/FiloSottile/mkcert) to
+generate a local CA + leaf cert that the iPhone will trust after one install.
+
+### 1. Generate certs on the host
+
+```bash
+brew install mkcert nss        # one-time
+mkcert -install               # creates local CA in macOS keychain
+cd app/nginx/certs
+mkcert -cert-file fullchain.pem -key-file privkey.pem 192.168.68.51 localhost 127.0.0.1
+```
+
+Rebuild the nginx image so the new cert is baked in:
+
+```bash
+cd app && docker compose build nginx && docker compose up -d nginx
+```
+
+### 2. Install the mkcert CA on the iPhone
+
+1. In Finder, locate `$(mkcert -CAROOT)/rootCA.pem` (default
+   `~/Library/Application Support/mkcert/rootCA.pem`).
+2. AirDrop it to the iPhone, or serve it from a local web server and open the
+   link in Safari.
+3. iOS prompts to install the profile. Confirm in **Settings → General → VPN & Device Management**.
+4. Enable full trust: **Settings → General → About → Certificate Trust Settings**
+   → enable **Enable Full Trust for Root Certificates** for the mkcert root.
+
+### 3. Validate AR on iPhone
+
+Use **Safari** (Edge/Chrome on iOS use WKWebView and may handle AR differently).
+Open the share link, confirm the GLB loads in the web viewer, then tap **AR**
+or the **View in AR** card. Quick Look should open with the IFC model and
+**Object / AR** tabs both populated.

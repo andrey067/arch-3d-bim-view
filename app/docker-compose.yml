@@ -29,6 +29,7 @@ services:
       IFCCONVERT_PATH: /usr/local/bin/IfcConvert
       USD_FROM_GLTF_PATH: /usr/local/bin/usd_from_gltf
       CONVERSION_TIMEOUT_S: "${CONVERSION_TIMEOUT_S:-120}"
+      AR_MAX_EXTENT_M: "${AR_MAX_EXTENT_M:-0.5}"
     ports:
       - "8080:8080"
     volumes:

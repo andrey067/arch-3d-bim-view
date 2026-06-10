@@ -6,6 +6,11 @@ public static class DatabaseMigrator
 {
     public static async Task ApplyAsync(AppDbContext db, CancellationToken ct = default)
     {
+        if (!db.Database.IsRelational())
+        {
+            return;
+        }
+
         if (await ProjectsTableExistsAsync(db, ct) && !await MigrationHistoryExistsAsync(db, ct))
         {
             await db.Database.ExecuteSqlRawAsync("""

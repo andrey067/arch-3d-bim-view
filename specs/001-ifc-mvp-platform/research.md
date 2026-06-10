@@ -40,6 +40,7 @@
 
 **Decision**
 - **Ferramenta primária: Google `usd_from_gltf`** — CLI nativa C++, projetada para AR Quick Look, 10–15× mais rápida que alternativas scriptadas, lê GLB binário e emite USDZ.
+- **Ordem no pipeline**: `IfcConvert` → **`glb_normalize`** (R-18) → `usd_from_gltf` → thumbnail. O USDZ reflete o GLB já normalizado para AR tabletop.
 - Implementação no converter:
   ```python
   # usd_converter.py
@@ -106,6 +107,7 @@
     ios-src={usdzUrl}
     ar
     ar-modes="quick-look scene-viewer webxr"
+    ar-placement="floor"
     camera-controls
     shadow-intensity="1"
     exposure="1"
@@ -115,6 +117,9 @@
   ```
 - `ios-src` **só é definido** quando `usdzUrl` é non-null e projeto `ready`.
 - `ar-modes` com `quick-look` **primeiro** — prioriza iOS.
+- `ar-placement="floor"` — modelo normalizado com `min(Y)=0` ancora em superfície detectada (mesa/chão).
+- Fallback iOS: `<a rel="ar" href={usdzUrl}>` quando o botão AR do model-viewer falha.
+- **Sem** `camera-target` fixo — deixa o model-viewer enquadrar o modelo tabletop.
 - API `GET /share/{token}` retorna:
   ```json
   {
@@ -132,7 +137,30 @@
 
 **Alternatives considered**
 - **Apenas `src` GLB com `ar-modes` incluindo quick-look**: insuficiente — comportamento atual que falha no iPhone.
-- **Link `<a rel="ar" href="...usdz">` separado**: redundante quando `ios-src` está correto; manter como fallback opcional pós-MVP.
+- **Link `<a rel="ar" href="...usdz">` separado**: adotado como fallback iOS no MVP após testes em dispositivo real.
+
+---
+
+## R-18. Normalização GLB para AR tabletop (`glb_normalize`)
+
+**Decision**
+- Após `IfcConvert`, executar `normalize_glb_for_ar(glb_path, max_extent_m)` em `glb_normalize.py` **antes** de `usd_from_gltf`.
+- Variável de ambiente `AR_MAX_EXTENT_M` (default **0.5** m) — maior dimensão do bounding box após normalização.
+- Passos (in-place no `model.glb`):
+  1. **Bake matrices**: para cada nó com `matrix` 4×4, multiplicar vértices POSITION da mesh filha; remover `matrix` dos nós.
+  2. **Scale uniforme**: `scale = max_extent_m / max(width, height, depth)` sobre o assembly completo.
+  3. **Center X/Z**: origem horizontal no centro do modelo.
+  4. **Floor Y**: transladar para `min(Y) = 0` — base apoiada na superfície em Quick Look / Scene Viewer.
+
+**Rationale**
+- IfcConvert emite **vários nós** com matrizes de translação (dezenas de metros). Escalar só vértices locais sem aplicar matrizes faz as peças **separarem** em AR (bug observado em produção).
+- Edifícios IFC típicos têm ~20 m de extensão; `ar-scale="auto"` do model-viewer **não** redimensiona o `ios-src` USDZ no iOS — a escala deve estar baked no asset.
+- Tabletop (~50 cm) cabe em mesa e evita colisão com paredes reais da sala.
+
+**Alternatives considered**
+- **Só `ar-scale="auto"` no model-viewer**: rejeitado — não afeta USDZ no Quick Look.
+- **IfcConvert com merge de geometria**: não disponível de forma confiável; bake de matrizes resolve sem reexportar IFC.
+- **Escala em USDZ pós-conversão**: rejeitado — duplicaria lógica; GLB normalizado alimenta web viewer e USDZ.
 
 ---
 
@@ -202,9 +230,10 @@
 | Concern | Choice |
 |---|---|
 | Object storage | **Local filesystem** `/data/projects/{id}/` |
-| GLB delivery | Backend `Results.File`, same-origin |
-| USDZ generation | **Google `usd_from_gltf`** in converter |
-| iOS AR | `ios-src` + `model/vnd.usdz+zip` + HTTPS + no redirect |
+| GLB delivery | Backend `Results.File`, same-origin, GET+HEAD |
+| GLB normalization | **`glb_normalize`** bake matrices + tabletop scale (`AR_MAX_EXTENT_M`) |
+| USDZ generation | **Google `usd_from_gltf`** on normalized GLB |
+| iOS AR | `ios-src` + `rel="ar"` fallback + `model/vnd.usdz+zip` + HTTPS + no redirect |
 | Android AR | `src` GLB + `scene-viewer` mode |
 | Auth | **None** (MVP correction) |
 | Queue | **None** (synchronous convert on upload) |

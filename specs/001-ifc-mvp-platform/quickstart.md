@@ -81,16 +81,47 @@ docker compose exec backend ls -la /data/projects/${PROJECT_ID}/
 - `model.usdz` (size > 0)
 - `thumbnail.png`
 
+### Conversion pipeline (what ran)
+
+On upload the converter executes synchronously:
+
+1. **IfcConvert** `-y` → `model.glb` (multi-node scene; each IFC product has a node `matrix`).
+2. **glb_normalize** → bakes matrices into vertices, scales to `AR_MAX_EXTENT_M` (default 0.5 m), sets `min(Y)=0`.
+3. **usd_from_gltf** → `model.usdz` from the normalized GLB.
+4. **Thumbnail** → `thumbnail.png`.
+
+Optional: confirm tabletop bounds from accessor `min`/`max` in the GLB JSON:
+
+```bash
+docker compose exec converter python3 -c "
+import json, struct
+p='/data/projects/${PROJECT_ID}/model.glb'
+d=open(p,'rb').read()
+jl=struct.unpack_from('<I',d,12)[0]
+g=json.loads(d[20:20+jl])
+mins=[a['min'] for a in g['accessors'] if 'min' in a]
+maxs=[a['max'] for a in g['accessors'] if 'max' in a]
+lo=[min(m[i] for m in mins) for i in range(3)]
+hi=[max(m[i] for m in maxs) for i in range(3)]
+print('dims m:', [round(hi[i]-lo[i],3) for i in range(3)], 'minY:', round(lo[1],3))
+"
+```
+
+Expect longest axis ≈ `AR_MAX_EXTENT_M` and `minY` ≈ 0.
+
 ---
 
 ## 3. Download GLB and USDZ (automated)
 
 ```bash
-# GLB
+# GLB (GET + HEAD — Quick Look / model-viewer may probe with HEAD)
 curl -sI "http://localhost:5001/files/${PROJECT_ID}/model.glb" | grep -E 'HTTP|Content-Type|Location'
 # HTTP/1.1 200
 # Content-Type: model/gltf-binary
 # (no Location header)
+
+curl -sI -X HEAD "http://localhost:5001/files/${PROJECT_ID}/model.glb" | grep HTTP
+# HTTP/1.1 200
 
 curl -s -o /tmp/test.glb "http://localhost:5001/files/${PROJECT_ID}/model.glb"
 file /tmp/test.glb
@@ -144,11 +175,13 @@ Abrir `https://<host>/s/${TOKEN}` (via HTTPS).
 | 5 | Tap "View in your space" / AR | ☐ Scene Viewer abre | ☐ Quick Look abre **sem** "Object could not be opened" |
 | 6 | Escanear QR Code (Android) | ☐ | N/A |
 | 7 | Escanear QR Code (iPhone) | N/A | ☐ |
-| 8 | Modelo ancorado em escala real | ☐ | ☐ |
+| 8 | Modelo tabletop na superfície (≈50 cm, peças unidas) | ☐ | ☐ |
 
 **iPhone debug tips**:
 - Safari Web Inspector → Network: `model.usdz` deve ser `200`, `model/vnd.usdz+zip`, sem redirect chain.
 - Confirmar `ios-src` attribute no `<model-viewer>` via Elements panel.
+- Se Quick Look abre vazio em iPhone, a causa mais comum é certificado self-signed — Quick Look corre num processo separado do Safari e **não herda** a confiança do certificado que aceitares no browser. Usa [mkcert](https://github.com/FiloSottile/mkcert) e instala a CA no iPhone (ver `app/README.md` §iPhone Quick Look setup).
+- O share page também mostra um card **View in AR** (link `<a rel="ar">` directo) para iOS como fallback do botão do `<model-viewer>`.
 
 ---
 

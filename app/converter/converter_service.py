@@ -15,6 +15,7 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from PIL import Image
 from pydantic import BaseModel
 
+from glb_normalize import GlbNormalizeError, normalize_glb_for_ar
 from usd_converter import UsdConversionError, glb_to_usdz
 
 logger = logging.getLogger("arch3dar.converter")
@@ -26,6 +27,7 @@ logging.basicConfig(
 DATA_ROOT = os.environ.get("DATA_ROOT", "/data")
 IFCCONVERT_PATH = os.environ.get("IFCCONVERT_PATH", "/usr/local/bin/IfcConvert")
 CONVERSION_TIMEOUT_S = int(os.environ.get("CONVERSION_TIMEOUT_S", "120"))
+AR_MAX_EXTENT_M = float(os.environ.get("AR_MAX_EXTENT_M", "2"))
 
 IFC_NAME = "original.ifc"
 GLB_NAME = "model.glb"
@@ -81,6 +83,8 @@ async def convert(
         raise HTTPException(status_code=422, detail=str(e)) from e
     except UsdConversionError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
+    except GlbNormalizeError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
     rel = f"projects/{projectId}"
     duration_ms = int((time.monotonic() - started) * 1000)
@@ -105,7 +109,7 @@ def _run_pipeline(ifc_bytes: bytes, project_id: str) -> None:
 
     try:
         proc = subprocess.run(
-            [IFCCONVERT_PATH, ifc_path, glb_path],
+            [IFCCONVERT_PATH, "-y", ifc_path, glb_path],
             capture_output=True,
             text=True,
             timeout=CONVERSION_TIMEOUT_S,
@@ -125,7 +129,7 @@ def _run_pipeline(ifc_bytes: bytes, project_id: str) -> None:
 
     try:
         thumb_proc = subprocess.run(
-            [IFCCONVERT_PATH, ifc_path, png_path, "--thumbnail"],
+            [IFCCONVERT_PATH, "-y", ifc_path, png_path, "--thumbnail"],
             capture_output=True,
             text=True,
             timeout=CONVERSION_TIMEOUT_S,
@@ -136,6 +140,7 @@ def _run_pipeline(ifc_bytes: bytes, project_id: str) -> None:
     if thumb_proc.returncode != 0 or not os.path.isfile(png_path):
         Image.new("RGB", (320, 240), color=(220, 220, 220)).save(png_path)
 
+    normalize_glb_for_ar(glb_path, AR_MAX_EXTENT_M)
     glb_to_usdz(glb_path, usdz_path)
     logger.info("Converted project %s → GLB %d bytes, USDZ %d bytes",
                 project_id, os.path.getsize(glb_path), os.path.getsize(usdz_path))

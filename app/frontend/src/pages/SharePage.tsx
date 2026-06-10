@@ -21,10 +21,16 @@ type ModelViewerElement = HTMLElement & {
   activateAR?: () => Promise<void>;
 };
 
+function isIOS(): boolean {
+  if (typeof navigator === 'undefined') return false;
+  return /iPad|iPhone|iPod/.test(navigator.userAgent) && !('MSStream' in window);
+}
+
 export default function SharePage() {
   const { token = '' } = useParams<{ token: string }>();
   const [state, setState] = useState<State>({ kind: 'loading' });
   const [arStatus, setArStatus] = useState<string>('not-presenting');
+  const [loadError, setLoadError] = useState<string | null>(null);
   const modelRef = useRef<ModelViewerElement | null>(null);
 
   useEffect(() => {
@@ -52,12 +58,20 @@ export default function SharePage() {
   useEffect(() => {
     const el = modelRef.current;
     if (!el) return;
-    const handler = (e: Event) => {
+    const onArStatus = (e: Event) => {
       const detail = (e as CustomEvent<{ status: string }>).detail;
       setArStatus(detail.status);
     };
-    el.addEventListener('ar-status-change', handler);
-    return () => el.removeEventListener('ar-status-change', handler);
+    const onError = (e: Event) => {
+      const detail = (e as CustomEvent<{ sourceError?: { message?: string } }>).detail;
+      setLoadError(detail?.sourceError?.message ?? 'Failed to load 3D model');
+    };
+    el.addEventListener('ar-status-change', onArStatus);
+    el.addEventListener('error', onError as EventListener);
+    return () => {
+      el.removeEventListener('ar-status-change', onArStatus);
+      el.removeEventListener('error', onError as EventListener);
+    };
   }, [state.kind]);
 
   if (state.kind === 'loading') {
@@ -84,7 +98,7 @@ export default function SharePage() {
     <div className="container">
       <h1>{data.name}</h1>
       <p className="muted">
-        Drag to orbit · scroll to zoom · on a phone, tap “View in your space” to launch AR
+        Drag to orbit · scroll to zoom · on a phone, point at a table and tap AR for a tabletop preview
       </p>
 
       {data.status !== 'Ready' || !data.glbUrl ? (
@@ -106,13 +120,38 @@ export default function SharePage() {
             exposure="1"
             auto-rotate=""
             ar={arAvailable ? '' : undefined}
-            ar-modes="webxr scene-viewer quick-look"
+            ar-modes="quick-look scene-viewer webxr"
+            ar-placement="floor"
             ar-scale="auto"
-            camera-target="0 0.5m 0"
             min-camera-orbit="auto auto auto"
             max-camera-orbit="Infinity 180deg auto"
             style={{ width: '100%', height: '50vh', minHeight: '300px', backgroundColor: '#f0f0f0', display: 'block' }}
           />
+        </div>
+      )}
+
+      {arAvailable && isIOS() && data.usdzUrl && data.thumbnailUrl && (
+        <div className="card" style={{ textAlign: 'center' }}>
+          <p className="muted" style={{ marginTop: 0 }}>
+            iPhone: tap below to preview on a table (Quick Look).
+          </p>
+          <a
+            rel="ar"
+            href={data.usdzUrl}
+            style={{ display: 'inline-block', textDecoration: 'none' }}
+          >
+            <img
+              src={data.thumbnailUrl}
+              alt="View in AR"
+              style={{ maxWidth: '100%', borderRadius: 8, border: '1px solid #e6e6e6' }}
+            />
+          </a>
+        </div>
+      )}
+
+      {loadError && (
+        <div className="banner" role="alert">
+          Could not load 3D model: {loadError}
         </div>
       )}
 

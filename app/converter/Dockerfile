@@ -6,6 +6,7 @@ ENV PYTHONUNBUFFERED=1
 ENV DATA_ROOT=/data
 ENV IFCCONVERT_PATH=/usr/local/bin/IfcConvert
 ENV USD_FROM_GLTF_PATH=/usr/local/bin/usd_from_gltf
+ENV AR_MAX_EXTENT_M=0.5
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/ufg/lib:/usr/local/USDinst/lib
 ENV PXR_PLUGINPATH_NAME=/usr/local/USDinst/lib/usd
 
@@ -41,7 +42,7 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 WORKDIR /app
-COPY converter_service.py usd_converter.py .
+COPY converter_service.py usd_converter.py glb_normalize.py .
 
 RUN mkdir -p /data
 

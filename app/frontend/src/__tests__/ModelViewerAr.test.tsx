@@ -42,5 +42,6 @@ describe('SharePage AR attributes', () => {
     expect(viewer?.getAttribute('ios-src')).toBe('https://test.local/files/id/model.usdz');
     expect(viewer?.getAttribute('ar-modes')).toBe('quick-look scene-viewer webxr');
     expect(viewer?.hasAttribute('ar')).toBe(true);
+    expect(viewer?.hasAttribute('camera-target')).toBe(false);
   });
 });

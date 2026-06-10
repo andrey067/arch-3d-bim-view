@@ -52,6 +52,47 @@ public class FileServingTests : IClassFixture<WebAppFactory>
     }
 
     [Fact]
+    public async Task Head_Usdz_Returns_200_With_Headers_And_Empty_Body()
+    {
+        var projectId = Guid.NewGuid();
+        using var scope = _factory.Services.CreateScope();
+        var storage = scope.ServiceProvider.GetRequiredService<LocalFileStorage>();
+
+        var payload = new byte[] { 0x50, 0x4B, 0x03, 0x04, 0x05, 0x06 };
+        await storage.WriteFileAsync(projectId, LocalFileStorage.UsdzFileName, payload, CancellationToken.None);
+
+        var client = _factory.CreateClient();
+        var request = new HttpRequestMessage(System.Net.Http.HttpMethod.Head, $"/files/{projectId}/model.usdz");
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("model/vnd.usdz+zip");
+        response.Content.Headers.ContentLength.Should().Be(payload.Length);
+        var body = await response.Content.ReadAsByteArrayAsync();
+        body.Should().BeEmpty();
+    }
+
+    [Fact]
+    public async Task Head_Glb_Returns_200_With_AcceptRanges_Header()
+    {
+        var projectId = Guid.NewGuid();
+        using var scope = _factory.Services.CreateScope();
+        var storage = scope.ServiceProvider.GetRequiredService<LocalFileStorage>();
+
+        await storage.WriteFileAsync(projectId, LocalFileStorage.GlbFileName, [0x67, 0x6C, 0x54, 0x46], CancellationToken.None);
+
+        var client = _factory.CreateClient();
+        var request = new HttpRequestMessage(System.Net.Http.HttpMethod.Head, $"/files/{projectId}/model.glb");
+        var response = await client.SendAsync(request);
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("model/gltf-binary");
+        response.Headers.Contains("Accept-Ranges").Should().BeTrue();
+        var body = await response.Content.ReadAsByteArrayAsync();
+        body.Should().BeEmpty();
+    }
+
+    [Fact]
     public async Task Share_Returns_SameOrigin_File_Urls()
     {
         var projectId = Guid.NewGuid();
