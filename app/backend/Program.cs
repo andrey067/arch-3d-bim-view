@@ -111,7 +111,7 @@ app.UseExceptionHandler(eb => eb.Run(async ctx =>
 using (var scope = app.Services.CreateScope())
 {
     var db = scope.ServiceProvider.GetRequiredService<AppDbContext>();
-    await db.Database.EnsureCreatedAsync();
+    await DatabaseMigrator.ApplyAsync(db);
 }
 
 string NewToken()

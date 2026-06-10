@@ -49,6 +49,17 @@ export default function SharePage() {
     };
   }, [token]);
 
+  useEffect(() => {
+    const el = modelRef.current;
+    if (!el) return;
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<{ status: string }>).detail;
+      setArStatus(detail.status);
+    };
+    el.addEventListener('ar-status-change', handler);
+    return () => el.removeEventListener('ar-status-change', handler);
+  }, [state.kind]);
+
   if (state.kind === 'loading') {
     return (
       <div className="container">
@@ -95,13 +106,12 @@ export default function SharePage() {
             exposure="1"
             auto-rotate=""
             ar={arAvailable ? '' : undefined}
-            ar-modes="quick-look scene-viewer webxr"
-            ar-status="not-presenting"
-            style={{ width: '100%', height: '100%', backgroundColor: '#f0f0f0', display: 'block' }}
-            onArStatus={(e: Event) => {
-              const detail = (e as CustomEvent<{ status: string }>).detail;
-              setArStatus(detail.status);
-            }}
+            ar-modes="webxr scene-viewer quick-look"
+            ar-scale="auto"
+            camera-target="0 0.5m 0"
+            min-camera-orbit="auto auto auto"
+            max-camera-orbit="Infinity 180deg auto"
+            style={{ width: '100%', height: '50vh', minHeight: '300px', backgroundColor: '#f0f0f0', display: 'block' }}
           />
         </div>
       )}

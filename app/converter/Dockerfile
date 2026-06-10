@@ -6,7 +6,8 @@ ENV PYTHONUNBUFFERED=1
 ENV DATA_ROOT=/data
 ENV IFCCONVERT_PATH=/usr/local/bin/IfcConvert
 ENV USD_FROM_GLTF_PATH=/usr/local/bin/usd_from_gltf
-ENV LD_LIBRARY_PATH=/usr/local/lib
+ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/ufg/lib:/usr/local/USDinst/lib
+ENV PXR_PLUGINPATH_NAME=/usr/local/USDinst/lib/usd
 
 ARG IFCONVERT_URL=https://s3.amazonaws.com/ifcopenshell-builds/IfcConvert-v0.7.11-d51fa2c-linux64.zip
 ARG IFCONVERT_SHA256=b418e0f4c315a89199095b53e8f6b12804b60912f7f413a77ee79ca0e33da0b6
@@ -24,6 +25,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 COPY --from=usd /usr/local/ufg/bin/usd_from_gltf /usr/local/bin/usd_from_gltf
 COPY --from=usd /usr/local/ufg/lib/ /usr/local/lib/
+COPY --from=usd /usr/local/lib/ /usr/local/lib/
+COPY --from=usd /usr/src/app/USDinst/ /usr/local/USDinst/
 
 RUN set -eux; \
     wget -q --timeout=60 "$IFCONVERT_URL" -O /tmp/IfcConvert.zip && \
