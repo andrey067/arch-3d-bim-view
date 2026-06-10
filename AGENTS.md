@@ -9,6 +9,7 @@ Supporting artifacts (read in this order when implementing a task):
 - `specs/001-ifc-mvp-platform/data-model.md` — entities, validation rules, state machine
 - `specs/001-ifc-mvp-platform/contracts/openapi.md` — HTTP API contract (frontend + converter sidecar)
 - `specs/001-ifc-mvp-platform/quickstart.md` — end-to-end validation scenarios
+- `specs/001-ifc-mvp-platform/adr-001-frontend-separation.md` — architectural decisions on frontend separation of concerns
 
 Active feature: `001-ifc-mvp-platform` (Arch3DAR — IFC-to-AR 3D Sharing MVP).
 Repository layout: `app/{backend,frontend,converter,tests}/` (do not change).
