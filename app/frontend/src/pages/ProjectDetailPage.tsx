@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import StatusBadge from '../components/StatusBadge';
-import ModelViewer from '../components/ModelViewer';
 import ShareDialog from '../components/ShareDialog';
 import { api, type ProjectDto, type ProjectStatus } from '../api/client';
 
@@ -68,7 +67,7 @@ export default function ProjectDetailPage() {
 
   const status = project.status as ProjectStatus;
   const canPublish = status === 'ReadyToPublish';
-  const glbPresignedUrl = project.thumbnailUrl; // placeholder: backend currently returns only thumb in detail
+  const isPublished = status === 'Published';
 
   return (
     <div className="project-detail">
@@ -96,17 +95,12 @@ export default function ProjectDetailPage() {
             Publish
           </button>
         )}
+        {isPublished && (
+          <button onClick={onPublish} className="button" data-testid="show-share">
+            Show share link
+          </button>
+        )}
       </div>
-
-      {glbPresignedUrl && status === 'Published' && (
-        <div className="viewer-wrap">
-          <ModelViewer
-            glbUrl={glbPresignedUrl}
-            thumbnailUrl={project.thumbnailUrl || ''}
-            alt={project.name}
-          />
-        </div>
-      )}
 
       {share && (
         <ShareDialog
