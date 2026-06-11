@@ -1,0 +1,21 @@
+FROM python:3.13-slim AS base
+
+WORKDIR /app
+
+# System deps for psycopg, bcrypt, and build tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libpq-dev build-essential && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python deps
+COPY pyproject.toml .
+RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || pip install --no-cache-dir .
+
+# Copy application code
+COPY app/ app/
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
+    CMD celery -A app.features.conversion.worker inspect ping --timeout 5 || exit 1
+
+CMD ["celery", "-A", "app.features.conversion.worker", "worker", "--loglevel=info"]

@@ -1,0 +1,26 @@
+# Backend Dockerfile — uses project root as build context
+FROM python:3.13-slim AS base
+
+WORKDIR /app
+
+# System deps for psycopg, bcrypt
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends gcc libpq-dev && \
+    rm -rf /var/lib/apt/lists/*
+
+# Install Python deps
+COPY apps/backend/pyproject.toml .
+RUN pip install --no-cache-dir -e ".[dev]" 2>/dev/null || pip install --no-cache-dir .
+
+# Copy application code
+COPY apps/backend/app/ app/
+COPY apps/backend/alembic.ini .
+COPY apps/backend/alembic/ alembic/
+
+# Health check
+HEALTHCHECK --interval=10s --timeout=5s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"
+
+EXPOSE 8000
+
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

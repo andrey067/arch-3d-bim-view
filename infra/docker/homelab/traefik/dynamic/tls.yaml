@@ -1,0 +1,5 @@
+# Traefik dynamic configuration — self-signed TLS
+tls:
+  certificates:
+    - certFile: /certs/tls.crt
+      keyFile: /certs/tls.key
