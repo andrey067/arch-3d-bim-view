@@ -130,7 +130,7 @@ Deferred. The simplified MVP is single-tenant with no authentication. Public lin
 
 - **FR-007**: The system MUST convert each uploaded source file into GLB asynchronously, without blocking the upload HTTP response.
 - **FR-007a**: IFC uploads MUST be converted via IfcOpenShell (`IfcConvert` or equivalent).
-- **FR-007b**: DAE and OBJ uploads (SketchUp workflow) MUST be converted via **Blender headless: Collada/OBJ import → GLB export** (Blender native `import_scene.dae` / `import_scene.obj` + glTF 2.0 export). No third-party SketchUp importer addon and no Assimp in the primary path. Native `.skp` import is explicitly out of scope.
+- **FR-007b**: DAE and OBJ uploads (SketchUp workflow) MUST be converted via **Blender headless: Collada/OBJ import → GLB export** (Blender `bpy.ops.wm.collada_import` com `import_units=True` para o `<unit meter="…">` do Collada + glTF 2.0 export, e `bpy.ops.wm.obj_import` com fallback para `bpy.ops.import_scene.obj`). No third-party SketchUp importer addon and no Assimp in the primary path. Native `.skp` import is explicitly out of scope.
 - **FR-007c**: The system MUST generate a USDZ from GLB for iPhone Quick Look AR; USDZ generation failure MUST mark the project `failed`.
 - **FR-008**: The system MUST generate a **`thumbnail.webp`** preview image from the converted model during conversion (Blender headless render).
 - **FR-009**: The system MUST handle conversion failures by transitioning the project to `failed` with a user-readable reason and MUST NOT generate a public link for a failed project.

@@ -9,7 +9,7 @@ ENV USD_FROM_GLTF_PATH=/usr/local/bin/usd_from_gltf
 ENV BLENDER_PATH=/opt/blender/blender
 ENV IFC_CONVERSION_TIMEOUT_S=120
 ENV MESH_CONVERSION_TIMEOUT_S=180
-ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/ufg/lib:/usr/local/USDinst/lib
+ENV LD_LIBRARY_PATH=/opt/blender/lib:/usr/local/lib:/usr/local/ufg/lib:/usr/local/USDinst/lib
 ENV PXR_PLUGINPATH_NAME=/usr/local/USDinst/lib/usd
 
 ARG IFCONVERT_URL=https://s3.amazonaws.com/ifcopenshell-builds/IfcConvert-v0.7.11-d51fa2c-linux64.zip
@@ -28,6 +28,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxi6 \
     libxxf86vm1 \
+    libxkbcommon0 \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*

@@ -243,7 +243,7 @@
     --format dae
   ```
   (ou `--format obj` para `original.obj`)
-- Blender operators: `bpy.ops.import_scene.dae` / `bpy.ops.import_scene.obj` — **nativos** no Blender 4.2, sem addon.
+- Blender operators: `bpy.ops.wm.collada_import` (Collada é addon legado em Blender 4.x; habilita-se `io_scene_collada` via `addon_utils.enable`) e `bpy.ops.wm.obj_import` (novo importer 4.x) com fallback para `bpy.ops.import_scene.obj`. Sem addon pago.
 - Após export GLB, pipeline comum: `glb_normalize` → `usd_from_gltf` → thumbnail.
 - Validação upload:
   | Format | Extension | Signature |

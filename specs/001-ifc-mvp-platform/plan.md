@@ -219,7 +219,7 @@ IFC E2E com Quick Look iPhone + storage local. Baseline de produção.
 ### Phase B — DAE/OBJ support (SketchUp workflow)
 
 1. **Remover** `skp_to_glb.py` / pipeline SKP (`io_sketchup`, `import_scene.skp`).
-2. Implementar `mesh_to_glb.py` (Blender batch: `import_scene.dae` / `import_scene.obj` → export glTF binary).
+2. Implementar `mesh_to_glb.py` (Blender batch: `bpy.ops.wm.collada_import` + `bpy.ops.wm.obj_import` → export glTF binary; addon `io_scene_collada` habilitado em runtime).
 3. Estender `POST /convert` com `sourceFormat` (`ifc`|`dae`|`obj`).
 4. Backend: `SourceFormat` enum; validação magic bytes DAE/OBJ; rejeitar `.skp` com mensagem Collada; upload UI `accept=".ifc,.dae,.obj"`.
 5. Frontend: instruções SketchUp export prominentes (FR-001a).

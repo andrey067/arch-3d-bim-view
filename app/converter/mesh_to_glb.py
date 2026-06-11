@@ -73,23 +73,46 @@ def _parse_blender_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def _enable_addon(mod_name: str) -> None:
+    try:
+        import addon_utils
+
+        addon_utils.enable(mod_name, default_set=True, persistent=False)
+    except Exception as e:  # pragma: no cover - addon enable is best-effort
+        logger.warning("could not enable addon %s: %s", mod_name, e)
+
+
 def _import_mesh_blender(input_path: str, mesh_format: str) -> None:
     import bpy
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
     if mesh_format == "dae":
-        bpy.ops.import_scene.dae(filepath=input_path)
-        return
-
-    if mesh_format == "obj":
+        # Blender 4.2 keeps Collada as a legacy addon: operator is wm.collada_import,
+        # not import_scene.dae. import_units=True respects the <unit meter="..."> the
+        # file declares (SketchUp exports use inches, meter="0.0254").
+        _enable_addon("io_scene_collada")
+        try:
+            bpy.ops.wm.collada_import(filepath=input_path, import_units=True)
+        except (AttributeError, RuntimeError) as e:
+            raise MeshConversionFailure(f"DAE import operator unavailable: {e}") from e
+    elif mesh_format == "obj":
+        # Blender 4.x ships the new obj importer under wm.obj_import; the legacy one
+        # under import_scene.obj was removed.
         if hasattr(bpy.ops.wm, "obj_import"):
             bpy.ops.wm.obj_import(filepath=input_path)
-        else:
+        elif hasattr(bpy.ops.import_scene, "obj"):
             bpy.ops.import_scene.obj(filepath=input_path)
-        return
+        else:
+            raise MeshConversionFailure("OBJ import operator unavailable")
+    else:
+        raise MeshConversionFailure(f"unsupported mesh format: {mesh_format}")
 
-    raise MeshConversionFailure(f"unsupported mesh format: {mesh_format}")
+    meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH"]
+    if not meshes:
+        raise MeshConversionFailure(
+            f"no mesh objects in scene after {mesh_format.upper()} import"
+        )
 
 
 def _blender_main() -> None:
@@ -97,6 +120,7 @@ def _blender_main() -> None:
     import bpy
 
     _import_mesh_blender(args.input, args.format)
+    _enable_addon("io_scene_gltf2")
     bpy.ops.export_scene.gltf(filepath=args.output, export_format="GLB")
 
 

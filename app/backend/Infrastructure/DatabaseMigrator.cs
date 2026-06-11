@@ -29,6 +29,31 @@ public static class DatabaseMigrator
         }
 
         await db.Database.MigrateAsync(ct);
+        await EnsureSourceFormatColumnAsync(db, ct);
+    }
+
+    private static async Task EnsureSourceFormatColumnAsync(AppDbContext db, CancellationToken ct)
+    {
+        await db.Database.ExecuteSqlRawAsync("""
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name = 'projects'
+                      AND column_name = 'SourceFormat'
+                ) THEN
+                    ALTER TABLE projects
+                        ADD COLUMN "SourceFormat" character varying(8) NOT NULL DEFAULT 'Ifc';
+                END IF;
+            END $$;
+            INSERT INTO "__EFMigrationsHistory" ("MigrationId", "ProductVersion")
+            SELECT '20260610130000_AddSourceFormat', '9.0.0'
+            WHERE NOT EXISTS (
+                SELECT 1 FROM "__EFMigrationsHistory"
+                WHERE "MigrationId" = '20260610130000_AddSourceFormat'
+            );
+            """, ct);
     }
 
     private static async Task<bool> ProjectsTableExistsAsync(AppDbContext db, CancellationToken ct)

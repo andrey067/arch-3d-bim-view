@@ -172,7 +172,7 @@
 
 ### Converter
 
-- [x] T088 [P] Create `app/converter/mesh_to_glb.py` — Blender batch: `import_scene.dae` / `import_scene.obj` → glTF binary GLB
+- [x] T088 [P] Create `app/converter/mesh_to_glb.py` — Blender batch: `bpy.ops.wm.collada_import` (DAE) / `bpy.ops.wm.obj_import` (OBJ) → glTF binary GLB
 - [x] T089 [P] Create `app/converter/mesh_pipeline.py` — orchestrate DAE/OBJ write → mesh_to_glb → common post-process
 - [x] T090 [US1] Update `app/converter/converter_service.py` — dispatch `ifc`|`dae`|`obj`; remove SKP branch
 - [x] T091 [US1] Delete `app/converter/skp_to_glb.py` and `app/converter/skp_pipeline.py`

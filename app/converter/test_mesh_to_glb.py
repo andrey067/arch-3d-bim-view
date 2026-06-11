@@ -79,3 +79,24 @@ def test_convert_mesh_missing_blender_raises() -> None:
                 blender_path="/nonexistent/blender",
                 timeout_s=5,
             )
+
+
+CADEIRA_FIXTURE = os.path.join(
+    os.path.dirname(__file__), "fixtures", "CADEIRA.dae"
+)
+
+
+@pytest.mark.skipif(
+    not os.path.isfile(CADEIRA_FIXTURE),
+    reason="CADEIRA.dae fixture not present",
+)
+@pytest.mark.skipif(shutil.which("blender") is None, reason="Blender not installed")
+def test_cadeira_dae_to_glb_produces_non_empty_glb() -> None:
+    """Smoke test against the real SketchUp chair export under files/."""
+    with tempfile.TemporaryDirectory() as tmp:
+        glb = os.path.join(tmp, "cadeira.glb")
+        convert_mesh_to_glb(
+            CADEIRA_FIXTURE, glb, mesh_format="dae", timeout_s=180
+        )
+        assert os.path.isfile(glb)
+        assert os.path.getsize(glb) > 1024
