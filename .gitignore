@@ -2,6 +2,7 @@
 node_modules/
 __pycache__/
 *.pyc
+.venv/
 
 # Build output
 dist/
@@ -27,13 +28,23 @@ Thumbs.db
 # Docker
 *.log
 
-# MinIO data
-minio_data/
-
 # PostgreSQL data
+pg_data/
 postgres_data/
 
+# Redis data
+redis_data/
+
+# Storage data (only .gitkeep tracked)
+storage/originals/*
+storage/converted/*
+storage/thumbnails/*
+!storage/originals/.gitkeep
+!storage/converted/.gitkeep
+!storage/thumbnails/.gitkeep
+
 # SSL certificates
-nginx/certs/
 *.pem
 *.key
+*.crt
+infra/docker/homelab/certs/

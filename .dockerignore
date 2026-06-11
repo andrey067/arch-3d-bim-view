@@ -1,0 +1,60 @@
+# Git
+.git
+.gitignore
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Python
+__pycache__
+*.pyc
+*.pyo
+.venv
+venv
+.pytest_cache
+.mypy_cache
+.ruff_cache
+
+# Node
+node_modules
+dist
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Logs
+*.log
+
+# Storage (mount at runtime, don't copy into image)
+storage/originals/*
+storage/converted/*
+storage/thumbnails/*
+!storage/originals/.gitkeep
+!storage/converted/.gitkeep
+!storage/thumbnails/.gitkeep
+
+# SSL certs
+*.pem
+*.key
+*.crt
+
+# Specs and docs (not needed in images)
+specs/
+docs/
+.cursor/
+.opencode/
+.specify/
+
+# Docker
+Dockerfile*
+docker-compose*.yml
+.dockerignore
