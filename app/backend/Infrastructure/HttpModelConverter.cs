@@ -1,5 +1,7 @@
 using System.Net.Http.Json;
 
+using Arch3DAr.Backend.Domain;
+
 namespace Arch3DAr.Backend.Infrastructure;
 
 public class ConverterSettings
@@ -20,13 +22,19 @@ public class HttpModelConverter
         _logger = logger;
     }
 
-    public async Task<ConverterResult> ConvertAsync(byte[] ifcBytes, Guid projectId, CancellationToken ct)
+    public async Task<ConverterResult> ConvertAsync(
+        byte[] sourceBytes,
+        Guid projectId,
+        SourceFormat sourceFormat,
+        CancellationToken ct)
     {
         using var content = new MultipartFormDataContent();
-        var fileContent = new ByteArrayContent(ifcBytes);
+        var ext = sourceFormat == SourceFormat.Skp ? "skp" : "ifc";
+        var fileContent = new ByteArrayContent(sourceBytes);
         fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
-        content.Add(fileContent, "file", $"{projectId}.ifc");
+        content.Add(fileContent, "file", $"{projectId}.{ext}");
         content.Add(new StringContent(projectId.ToString()), "projectId");
+        content.Add(new StringContent(ext), "sourceFormat");
 
         var resp = await _http.PostAsync($"{_settings.Url}/convert", content, ct);
         var body = await resp.Content.ReadAsStringAsync(ct);

@@ -11,7 +11,7 @@ public class ProjectStateTransitionTests
     public void Create_Starts_Uploading()
     {
         var id = Guid.NewGuid();
-        var p = Project.Create(id, "abc123", "Sofa", 1024, Now);
+        var p = Project.Create(id, "abc123", "Sofa", SourceFormat.Ifc, 1024, Now);
         Assert.Equal(ProjectStatus.Uploading, p.Status);
         Assert.Equal($"projects/{id}", p.DataDirectory);
     }
@@ -19,7 +19,7 @@ public class ProjectStateTransitionTests
     [Fact]
     public void MarkConverting_Updates_Status()
     {
-        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", 1024, Now);
+        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", SourceFormat.Ifc, 1024, Now);
         p.MarkConverting(Now);
         Assert.Equal(ProjectStatus.Converting, p.Status);
     }
@@ -27,7 +27,7 @@ public class ProjectStateTransitionTests
     [Fact]
     public void MarkReady_Sets_Duration_And_Ready()
     {
-        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", 1024, Now);
+        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", SourceFormat.Ifc, 1024, Now);
         p.MarkConverting(Now);
         p.MarkReady(4500, Now);
         Assert.Equal(ProjectStatus.Ready, p.Status);
@@ -38,7 +38,7 @@ public class ProjectStateTransitionTests
     [Fact]
     public void MarkFailed_Sets_Error()
     {
-        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", 1024, Now);
+        var p = Project.Create(Guid.NewGuid(), "abc123", "Sofa", SourceFormat.Ifc, 1024, Now);
         p.MarkFailed("USDZ generation failed", Now);
         Assert.Equal(ProjectStatus.Failed, p.Status);
         Assert.Equal("USDZ generation failed", p.ErrorMessage);

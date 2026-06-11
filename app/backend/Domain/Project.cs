@@ -14,6 +14,8 @@ public class Project
 
     public string DataDirectory { get; private set; } = string.Empty;
 
+    public SourceFormat SourceFormat { get; private set; } = SourceFormat.Ifc;
+
     public long IfcSizeBytes { get; private set; }
 
     public long? ConversionDurationMs { get; private set; }
@@ -28,7 +30,8 @@ public class Project
         Guid id,
         string publicToken,
         string name,
-        long ifcSizeBytes,
+        SourceFormat sourceFormat,
+        long originalSizeBytes,
         DateTimeOffset now)
     {
         return new Project
@@ -36,8 +39,9 @@ public class Project
             Id = id,
             PublicToken = publicToken,
             Name = name.Trim(),
+            SourceFormat = sourceFormat,
             DataDirectory = $"projects/{id}",
-            IfcSizeBytes = ifcSizeBytes,
+            IfcSizeBytes = originalSizeBytes,
             Status = ProjectStatus.Uploading,
             CreatedAt = now,
             UpdatedAt = now,

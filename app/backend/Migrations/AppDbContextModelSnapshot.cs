@@ -52,6 +52,11 @@ namespace Arch3DAr.Backend.Migrations
                         .HasMaxLength(32)
                         .HasColumnType("character varying(32)");
 
+                    b.Property<string>("SourceFormat")
+                        .IsRequired()
+                        .HasMaxLength(8)
+                        .HasColumnType("character varying(8)");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(32)

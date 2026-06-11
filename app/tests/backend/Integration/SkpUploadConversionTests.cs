@@ -1,3 +1,4 @@
+using System.IO.Compression;
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
@@ -10,35 +11,30 @@ using Xunit;
 
 namespace Arch3DAr.Backend.Tests.Integration;
 
-public class UploadConversionTests : IClassFixture<WebAppFactory>
+public class SkpUploadConversionTests : IClassFixture<WebAppFactory>
 {
     private readonly WebAppFactory _factory;
 
-    public UploadConversionTests(WebAppFactory factory) => _factory = factory;
+    public SkpUploadConversionTests(WebAppFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task Upload_With_Mocked_Converter_Writes_Files_And_Returns_Ready()
+    public async Task Upload_Skp_With_Mocked_Converter_Writes_Files_And_Returns_Ready()
     {
         var client = _factory.WithWebHostBuilder(builder =>
         {
             builder.ConfigureServices(services =>
             {
                 services.AddHttpClient<HttpModelConverter>()
-                    .ConfigurePrimaryHttpMessageHandler(() => new MockConverterHandler(_factory.DataRoot));
+                    .ConfigurePrimaryHttpMessageHandler(() => new MockSkpConverterHandler(_factory.DataRoot));
             });
         }).CreateClient();
 
-        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Integration", "Fixtures", "sample.ifc");
-        if (!File.Exists(fixturePath))
-        {
-            Directory.CreateDirectory(Path.GetDirectoryName(fixturePath)!);
-            await File.WriteAllTextAsync(fixturePath, "ISO-10303-21;\nENDSEC;\nEND-ISO-10303-21;\n");
-        }
+        var fixturePath = EnsureSampleSkpFixture();
 
         await using var stream = File.OpenRead(fixturePath);
         using var content = new MultipartFormDataContent();
-        content.Add(new StreamContent(stream), "file", "sample.ifc");
-        content.Add(new StringContent("Test Model"), "name");
+        content.Add(new StreamContent(stream), "file", "sample.skp");
+        content.Add(new StringContent("SKP Test Model"), "name");
 
         var response = await client.PostAsync("/upload", content);
         var body = await response.Content.ReadFromJsonAsync<UploadResponse>();
@@ -46,21 +42,45 @@ public class UploadConversionTests : IClassFixture<WebAppFactory>
         response.StatusCode.Should().Be(HttpStatusCode.OK);
         body.Should().NotBeNull();
         body!.status.Should().Be("Ready");
+        body.sourceFormat.Should().Be("skp");
 
         using var scope = _factory.Services.CreateScope();
         var storage = scope.ServiceProvider.GetRequiredService<LocalFileStorage>();
+        storage.FileExists(body.projectId, LocalFileStorage.SkpFileName).Should().BeTrue();
         storage.FileExists(body.projectId, LocalFileStorage.GlbFileName).Should().BeTrue();
         storage.FileExists(body.projectId, LocalFileStorage.UsdzFileName).Should().BeTrue();
         storage.FileExists(body.projectId, LocalFileStorage.ThumbnailFileName).Should().BeTrue();
     }
 
-    private sealed record UploadResponse(string token, Guid projectId, string status, string shareUrl);
+    private static string EnsureSampleSkpFixture()
+    {
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Integration", "Fixtures", "sample.skp");
+        if (File.Exists(fixturePath))
+        {
+            return fixturePath;
+        }
 
-    private sealed class MockConverterHandler : HttpMessageHandler
+        Directory.CreateDirectory(Path.GetDirectoryName(fixturePath)!);
+        using (var zip = ZipFile.Open(fixturePath, ZipArchiveMode.Create))
+        {
+            zip.CreateEntry("SketchUp/version.txt").Open().Dispose();
+        }
+
+        return fixturePath;
+    }
+
+    private sealed record UploadResponse(
+        string token,
+        Guid projectId,
+        string sourceFormat,
+        string status,
+        string shareUrl);
+
+    private sealed class MockSkpConverterHandler : HttpMessageHandler
     {
         private readonly string _dataRoot;
 
-        public MockConverterHandler(string dataRoot) => _dataRoot = dataRoot;
+        public MockSkpConverterHandler(string dataRoot) => _dataRoot = dataRoot;
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -76,6 +96,7 @@ public class UploadConversionTests : IClassFixture<WebAppFactory>
             var boundary = contentType[(boundaryIndex + boundaryMarker.Length)..].Trim().Trim('"');
             var reader = new MultipartReader(boundary, stream);
             string? projectId = null;
+            string? sourceFormat = null;
             for (var section = await reader.ReadNextSectionAsync(cancellationToken);
                  section is not null;
                  section = await reader.ReadNextSectionAsync(cancellationToken))
@@ -90,9 +111,14 @@ public class UploadConversionTests : IClassFixture<WebAppFactory>
                     using var sr = new StreamReader(section.Body);
                     projectId = await sr.ReadToEndAsync(cancellationToken);
                 }
+                else if (disposition.Name == "sourceFormat")
+                {
+                    using var sr = new StreamReader(section.Body);
+                    sourceFormat = await sr.ReadToEndAsync(cancellationToken);
+                }
             }
 
-            if (string.IsNullOrEmpty(projectId))
+            if (string.IsNullOrEmpty(projectId) || sourceFormat != "skp")
             {
                 return new HttpResponseMessage(HttpStatusCode.BadRequest);
             }
@@ -101,10 +127,10 @@ public class UploadConversionTests : IClassFixture<WebAppFactory>
             Directory.CreateDirectory(dir);
             await File.WriteAllBytesAsync(Path.Combine(dir, LocalFileStorage.GlbFileName), [0x67, 0x6C, 0x54, 0x46], cancellationToken);
             await File.WriteAllBytesAsync(Path.Combine(dir, LocalFileStorage.UsdzFileName), [0x50, 0x4B, 0x03, 0x04], cancellationToken);
-            await File.WriteAllBytesAsync(Path.Combine(dir, LocalFileStorage.ThumbnailFileName), [0x52, 0x49, 0x46, 0x46], cancellationToken);
+            await File.WriteAllBytesAsync(Path.Combine(dir, LocalFileStorage.ThumbnailFileName), [0x89, 0x50, 0x4E, 0x47], cancellationToken);
 
             var json = $$"""
-                {"glbPath":"projects/{{projectId}}/model.glb","usdzPath":"projects/{{projectId}}/model.usdz","thumbnailPath":"projects/{{projectId}}/thumbnail.webp","durationMs":42}
+                {"glbPath":"projects/{{projectId}}/model.glb","usdzPath":"projects/{{projectId}}/model.usdz","thumbnailPath":"projects/{{projectId}}/thumbnail.webp","durationMs":99}
                 """;
 
             return new HttpResponseMessage(HttpStatusCode.OK)

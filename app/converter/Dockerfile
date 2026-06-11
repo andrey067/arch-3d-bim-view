@@ -6,7 +6,9 @@ ENV PYTHONUNBUFFERED=1
 ENV DATA_ROOT=/data
 ENV IFCCONVERT_PATH=/usr/local/bin/IfcConvert
 ENV USD_FROM_GLTF_PATH=/usr/local/bin/usd_from_gltf
-ENV AR_MAX_EXTENT_M=0.5
+ENV BLENDER_PATH=/opt/blender/blender
+ENV IFC_CONVERSION_TIMEOUT_S=120
+ENV SKP_CONVERSION_TIMEOUT_S=180
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/ufg/lib:/usr/local/USDinst/lib
 ENV PXR_PLUGINPATH_NAME=/usr/local/USDinst/lib/usd
 
@@ -18,11 +20,25 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     python3-pip \
     wget \
     unzip \
+    xz-utils \
     libgl1-mesa-glx \
     libglib2.0-0 \
+    libsm6 \
+    libxrender1 \
+    libxext6 \
+    libxi6 \
+    libxxf86vm1 \
     ca-certificates \
     curl \
     && rm -rf /var/lib/apt/lists/*
+
+ARG BLENDER_VERSION=4.2.3
+RUN set -eux; \
+    wget -q --timeout=120 "https://download.blender.org/release/Blender4.2/blender-${BLENDER_VERSION}-linux-x64.tar.xz" -O /tmp/blender.tar.xz; \
+    tar xf /tmp/blender.tar.xz -C /opt; \
+    mv /opt/blender-* /opt/blender; \
+    rm /tmp/blender.tar.xz; \
+    /opt/blender/blender --version
 
 COPY --from=usd /usr/local/ufg/bin/usd_from_gltf /usr/local/bin/usd_from_gltf
 COPY --from=usd /usr/local/ufg/lib/ /usr/local/lib/
@@ -42,7 +58,7 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 WORKDIR /app
-COPY converter_service.py usd_converter.py glb_normalize.py .
+COPY converter_service.py usd_converter.py glb_normalize.py ifc_pipeline.py skp_to_glb.py skp_pipeline.py render_thumbnail.py .
 
 RUN mkdir -p /data
 

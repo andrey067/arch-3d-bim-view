@@ -1,22 +1,21 @@
-"""Arch3DAR model-conversion worker — IFC → GLB → USDZ on local disk."""
+"""Arch3DAR model-conversion worker — IFC/SKP → GLB → USDZ on local disk."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-import subprocess
-import tempfile
 import time
 
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from PIL import Image
 from pydantic import BaseModel
 
-from glb_normalize import GlbNormalizeError, normalize_glb_for_ar
-from usd_converter import UsdConversionError, glb_to_usdz
+from ifc_pipeline import ConversionFailure as IfcConversionFailure
+from ifc_pipeline import run_ifc_pipeline
+from skp_pipeline import ConversionFailure as SkpConversionFailure
+from skp_pipeline import run_skp_pipeline
 
 logger = logging.getLogger("arch3dar.converter")
 logging.basicConfig(
@@ -26,13 +25,16 @@ logging.basicConfig(
 
 DATA_ROOT = os.environ.get("DATA_ROOT", "/data")
 IFCCONVERT_PATH = os.environ.get("IFCCONVERT_PATH", "/usr/local/bin/IfcConvert")
-CONVERSION_TIMEOUT_S = int(os.environ.get("CONVERSION_TIMEOUT_S", "120"))
+BLENDER_PATH = os.environ.get("BLENDER_PATH", "blender")
+IFC_CONVERSION_TIMEOUT_S = int(
+    os.environ.get("IFC_CONVERSION_TIMEOUT_S", os.environ.get("CONVERSION_TIMEOUT_S", "120"))
+)
+SKP_CONVERSION_TIMEOUT_S = int(os.environ.get("SKP_CONVERSION_TIMEOUT_S", "180"))
 AR_MAX_EXTENT_M = float(os.environ.get("AR_MAX_EXTENT_M", "2"))
 
-IFC_NAME = "original.ifc"
 GLB_NAME = "model.glb"
 USDZ_NAME = "model.usdz"
-THUMB_NAME = "thumbnail.png"
+THUMB_NAME = "thumbnail.webp"
 
 
 class ConvertResponse(BaseModel):
@@ -40,10 +42,6 @@ class ConvertResponse(BaseModel):
     usdzPath: str
     thumbnailPath: str
     durationMs: int
-
-
-class ConversionFailure(RuntimeError):
-    pass
 
 
 @asynccontextmanager
@@ -69,21 +67,26 @@ def _project_dir(project_id: str) -> str:
 @app.post("/convert")
 async def convert(
     projectId: str = Form(...),
+    sourceFormat: str = Form("ifc"),
     file: UploadFile = File(...),
 ) -> ConvertResponse:
-    started = time.monotonic()
+    """Convert IFC or SKP upload to GLB, USDZ, and WebP thumbnail on local disk.
 
-    ifc_bytes = await file.read()
-    if not ifc_bytes:
+    Form fields: projectId (UUID), sourceFormat (ifc|skp), file (binary).
+    Returns glbPath, usdzPath, thumbnailPath (under projects/{id}/), durationMs.
+    """
+    started = time.monotonic()
+    fmt = sourceFormat.lower().strip()
+    if fmt not in ("ifc", "skp"):
+        raise HTTPException(status_code=400, detail="sourceFormat must be ifc or skp")
+
+    source_bytes = await file.read()
+    if not source_bytes:
         raise HTTPException(status_code=400, detail="empty upload")
 
     try:
-        await asyncio.to_thread(_run_pipeline, ifc_bytes, projectId)
-    except ConversionFailure as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    except UsdConversionError as e:
-        raise HTTPException(status_code=422, detail=str(e)) from e
-    except GlbNormalizeError as e:
+        await asyncio.to_thread(_run_pipeline, source_bytes, projectId, fmt)
+    except (IfcConversionFailure, SkpConversionFailure) as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     rel = f"projects/{projectId}"
@@ -96,54 +99,25 @@ async def convert(
     )
 
 
-def _run_pipeline(ifc_bytes: bytes, project_id: str) -> None:
-    ifc_bytes = ifc_bytes.replace(b"\r\n", b"\n")
+def _run_pipeline(source_bytes: bytes, project_id: str, source_format: str) -> None:
     out_dir = _project_dir(project_id)
-    ifc_path = os.path.join(out_dir, IFC_NAME)
-    glb_path = os.path.join(out_dir, GLB_NAME)
-    usdz_path = os.path.join(out_dir, USDZ_NAME)
-    png_path = os.path.join(out_dir, THUMB_NAME)
-
-    with open(ifc_path, "wb") as f:
-        f.write(ifc_bytes)
-
-    try:
-        proc = subprocess.run(
-            [IFCCONVERT_PATH, "-y", ifc_path, glb_path],
-            capture_output=True,
-            text=True,
-            timeout=CONVERSION_TIMEOUT_S,
+    if source_format == "skp":
+        run_skp_pipeline(
+            source_bytes,
+            out_dir,
+            blender_path=BLENDER_PATH,
+            skp_timeout_s=SKP_CONVERSION_TIMEOUT_S,
+            ar_max_extent_m=AR_MAX_EXTENT_M,
         )
-    except subprocess.TimeoutExpired as e:
-        raise ConversionFailure("conversion timeout") from e
-    except FileNotFoundError as e:
-        raise ConversionFailure("IfcConvert binary not found") from e
-
-    if proc.returncode != 0:
-        raise ConversionFailure(
-            f"IfcConvert exited {proc.returncode}: {proc.stderr.strip()[:200]}"
+    else:
+        run_ifc_pipeline(
+            source_bytes,
+            out_dir,
+            ifcconvert_path=IFCCONVERT_PATH,
+            conversion_timeout_s=IFC_CONVERSION_TIMEOUT_S,
+            ar_max_extent_m=AR_MAX_EXTENT_M,
+            blender_path=BLENDER_PATH,
         )
-
-    if not os.path.isfile(glb_path) or os.path.getsize(glb_path) == 0:
-        raise ConversionFailure("empty GLB output")
-
-    try:
-        thumb_proc = subprocess.run(
-            [IFCCONVERT_PATH, "-y", ifc_path, png_path, "--thumbnail"],
-            capture_output=True,
-            text=True,
-            timeout=CONVERSION_TIMEOUT_S,
-        )
-    except subprocess.TimeoutExpired as e:
-        raise ConversionFailure("thumbnail timeout") from e
-
-    if thumb_proc.returncode != 0 or not os.path.isfile(png_path):
-        Image.new("RGB", (320, 240), color=(220, 220, 220)).save(png_path)
-
-    normalize_glb_for_ar(glb_path, AR_MAX_EXTENT_M)
-    glb_to_usdz(glb_path, usdz_path)
-    logger.info("Converted project %s → GLB %d bytes, USDZ %d bytes",
-                project_id, os.path.getsize(glb_path), os.path.getsize(usdz_path))
 
 
 if __name__ == "__main__":

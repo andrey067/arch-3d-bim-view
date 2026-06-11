@@ -22,7 +22,7 @@ describe('SharePage', () => {
           status: 'Ready',
           glbUrl: 'https://test.local/files/abc/model.glb',
           usdzUrl: 'https://test.local/files/abc/model.usdz',
-          thumbnailUrl: 'https://test.local/files/abc/thumbnail.png',
+          thumbnailUrl: 'https://test.local/files/abc/thumbnail.webp',
         }),
       }),
     );
@@ -42,7 +42,7 @@ describe('SharePage', () => {
     const viewer = document.querySelector('model-viewer');
     expect(viewer).not.toBeNull();
     expect(viewer?.getAttribute('src')).toBe('https://test.local/files/abc/model.glb');
-    expect(viewer?.getAttribute('poster')).toBe('https://test.local/files/abc/thumbnail.png');
+    expect(viewer?.getAttribute('poster')).toBe('https://test.local/files/abc/thumbnail.webp');
   });
 
   it('shows rel="ar" fallback link on iOS user agent', async () => {
@@ -61,7 +61,7 @@ describe('SharePage', () => {
           status: 'Ready',
           glbUrl: 'https://test.local/files/abc/model.glb',
           usdzUrl: 'https://test.local/files/abc/model.usdz',
-          thumbnailUrl: 'https://test.local/files/abc/thumbnail.png',
+          thumbnailUrl: 'https://test.local/files/abc/thumbnail.webp',
         }),
       }),
     );

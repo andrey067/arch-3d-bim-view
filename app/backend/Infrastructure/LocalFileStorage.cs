@@ -1,5 +1,7 @@
 namespace Arch3DAr.Backend.Infrastructure;
 
+using Arch3DAr.Backend.Domain;
+
 public sealed class LocalFileStorageSettings
 {
     public string DataRoot { get; set; } = "/data";
@@ -8,9 +10,13 @@ public sealed class LocalFileStorageSettings
 public sealed class LocalFileStorage
 {
     public const string IfcFileName = "original.ifc";
+    public const string SkpFileName = "original.skp";
     public const string GlbFileName = "model.glb";
     public const string UsdzFileName = "model.usdz";
-    public const string ThumbnailFileName = "thumbnail.png";
+    public const string ThumbnailFileName = "thumbnail.webp";
+
+    public static string OriginalFileName(SourceFormat format) =>
+        format == SourceFormat.Skp ? SkpFileName : IfcFileName;
 
     private readonly string _dataRoot;
 

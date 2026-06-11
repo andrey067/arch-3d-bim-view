@@ -1,11 +1,25 @@
-# Feature Specification: Arch3DAR — IFC-to-AR 3D Sharing MVP
+# Feature Specification: Arch3DAR — IFC/SKP-to-AR 3D Sharing MVP
 
 **Feature Branch**: `001-ifc-mvp-platform`
 **Created**: 2026-06-09
 **Status**: Draft
-**Input**: User description: "Plataforma SaaS de compartilhamento de modelos 3D para arquitetura, interiores e móveis planejados utilizando IFC como formato de entrada e GLB como formato de visualização e Realidade Aumentada."
+**Input**: User description: "Plataforma de compartilhamento de modelos 3D para arquitetura, interiores e móveis planejados com upload de `.ifc` ou `.skp`, conversão para visualização Web e Realidade Aumentada (Android + iPhone)."
 
-> **Product positioning**: Arch3DAR is **not** a BIM platform, **not** a coordination tool, and **not** an engineering suite. It is a SaaS that lets architects, interior designers, and custom-furniture manufacturers share a single 3D model with their client through a public link and AR — solving the "I cannot see the piece in my real room" problem.
+> **Product positioning**: Arch3DAR is **not** a BIM platform, **not** a coordination tool, and **not** an engineering suite. It lets architects, interior designers, and custom-furniture manufacturers share a single 3D model with their client through a public link and AR — solving the "I cannot see the piece in my real room" problem.
+
+> **MVP scope (clarified)**: Simplified single-tenant flow — upload page + public viewer, **no authentication**, **no dashboard**, **local filesystem storage**, **no object storage / MinIO**. Both **`.ifc` and `.skp`** are accepted in the same release. Focus: geometry, materials, textures, web 3D viewer, and AR — **not** IFC spatial tree, properties, classification, or BIM metadata.
+
+---
+
+## Clarifications
+
+### Session 2026-06-10
+
+- Q: Qual escopo rege o spec — correção IFC-only, SpecDrive completo, ou faseado? → A: **SpecDrive sobre a correção** — MVP simplificado (sem auth), IFC + SKP no mesmo release.
+- Q: Qual pipeline primário para conversão SKP? → A: **Blender headless: SKP → GLB direto** (import SKP nativo + export glTF 2.0; sem DAE intermediário, sem Assimp).
+- Q: Qual layout de armazenamento no disco local? → A: **`/data/projects/{projectId}/`** — conforme correção ativa (não `/uploads`).
+- Q: Qual formato padrão do thumbnail? → A: **`thumbnail.webp`** — WebP gerado via Blender headless render.
+- Q: Como organizar conversores no Docker Compose? → A: **Sidecar único `converter`** — IfcOpenShell + Blender + USDZ + thumbnail num container Python; serviços: postgres, backend, converter, frontend.
 
 ---
 
@@ -13,21 +27,21 @@
 
 User stories are ordered by dependency and business value. The MVP only delivers value if stories P1–P3 all work end-to-end.
 
-### User Story 1 — Architect publishes a model and shares a public link (Priority: P1)
+### User Story 1 — Architect uploads a model and receives a public link (Priority: P1)
 
-An architect (or interior designer / furniture maker) creates a project, uploads a single `.ifc` file exported from SketchUp/Revit/AutoCAD/ArchiCAD/Blender, waits for the system to process it, then publishes the project and receives a public URL plus a QR code to send to the client.
+An architect (or interior designer / furniture maker) opens the upload page, submits a single `.ifc` or `.skp` file (from SketchUp, Revit, AutoCAD, ArchiCAD, Blender, etc.), waits for automatic conversion, and receives a public URL plus a QR code to send to the client. No login is required.
 
 **Why this priority**: This is the entire value proposition. Without upload + conversion + share, the product does not exist. Every other story is downstream of this one.
 
-**Independent Test**: A new project is created, a sample `.ifc` is uploaded, conversion completes (status = "converted"), publish returns a public URL and a QR code image, both are reachable.
+**Independent Test**: Upload a sample `.ifc` or `.skp`, conversion completes (status = ready), the response includes a public URL and QR code, both are reachable.
 
 **Acceptance Scenarios**:
 
-1. **Given** an authenticated user with no projects, **When** they create a project named "Living Room Sofa" and upload a valid `.ifc` file (≤ configured size limit), **Then** the system stores the original file, transitions the project to "processing", and starts conversion asynchronously.
-2. **Given** a project whose conversion finished successfully, **When** the user clicks "Publish", **Then** the system returns a public URL and a QR code image pointing to that URL, and transitions the project to "published".
-3. **Given** an upload of a file whose extension is not `.ifc` or whose size exceeds the configured limit, **When** the user submits it, **Then** the system rejects the upload before persisting any file and returns a clear, user-readable error.
+1. **Given** the upload page, **When** the user submits a valid `.ifc` or `.skp` file (≤ configured size limit), **Then** the system stores the original file on local disk, transitions the project to "processing", and starts conversion without blocking the upload response.
+2. **Given** a project whose conversion finished successfully, **When** conversion completes, **Then** the system returns (or displays) a public URL and a QR code image pointing to that URL.
+3. **Given** an upload whose extension is not `.ifc` or `.skp`, or whose size exceeds the configured limit, **When** the user submits it, **Then** the system rejects the upload before persisting any file and returns a clear, user-readable error.
 4. **Given** a conversion that fails internally, **When** the system detects the failure, **Then** the project status becomes "failed" with a user-readable reason, and no public link is generated.
-5. **Given** an already-published project, **When** the user clicks "Publish" again, **Then** the same public link and QR code are returned (idempotent) without creating a second one.
+5. **Given** a valid `.skp` upload with materials and textures, **When** conversion completes, **Then** the generated GLB preserves visible materials and textures in the web viewer (best-effort; exact fidelity is not guaranteed for every SketchUp feature).
 
 ---
 
@@ -66,44 +80,24 @@ On a mobile device, the client taps an "View in your space" / "AR" button on the
 
 ---
 
-### User Story 4 — Architect manages projects from a dashboard (Priority: P2)
+### User Story 4 — Architect manages projects from a dashboard *(Out of scope — MVP)*
 
-The architect logs in to a dashboard that lists their projects with key information, lets them create a new project, upload a file, and see status + thumbnail while conversion runs. They can open a project detail view to see generated artifacts and trigger publishing.
-
-**Why this priority**: UX glue around P1. Without it the architect would have to use raw API calls. It can be reduced for the very first market test (one project, one share) but is needed before paying customers use the product.
-
-**Independent Test**: Sign in, see the dashboard, create + upload a new project, see it appear with status "processing" → "ready to publish", open detail, click publish, see link + QR.
-
-**Acceptance Scenarios**:
-
-1. **Given** an authenticated user, **When** they open the dashboard, **Then** they see a list of their projects with name, creation date, current status, and a thumbnail (when available).
-2. **Given** the dashboard, **When** the user clicks "New project", **Then** they are taken to a creation flow where they can name the project, describe it, optionally add a client name, and upload an `.ifc` file via drag-and-drop or file picker.
-3. **Given** the upload is in progress, **When** the user watches the UI, **Then** a progress indicator reflects the upload state, and once the upload finishes the UI switches to "processing".
-4. **Given** a project whose status is "ready to publish" (conversion succeeded), **When** the user opens the project detail, **Then** the detail view shows the thumbnail, the generated 3D asset, and a "Publish" action.
-5. **Given** a project whose status is "failed", **When** the user opens the project detail, **Then** a user-readable error reason is shown and the project can be retried by uploading a new file (deleting the old one is not required for MVP).
+Deferred. The simplified MVP uses a single upload page; there is no authenticated dashboard, project list, or publish step. Conversion success automatically yields a shareable link.
 
 ---
 
-### User Story 5 — Multi-tenancy / data isolation (Priority: P3)
+### User Story 5 — Multi-tenancy / data isolation *(Out of scope — MVP)*
 
-Projects, files, and public links are scoped to a tenant (the architect's account / organization). One tenant cannot see or modify another tenant's data. Public links expose only what is strictly necessary to render the model — no internal IDs or tenant metadata are leaked.
-
-**Why this priority**: Required for the product to be sold to more than one customer. Out of scope for the very first "one architect shares with one client" validation, but architecture must not block it.
-
-**Independent Test**: As Tenant A, create and publish a project. As Tenant B, attempt to read the project via API or guess the public URL — the response is "not found" and no file is served.
-
-**Acceptance Scenarios**:
-
-1. **Given** a user from Tenant A, **When** they list projects, **Then** they only see projects belonging to Tenant A.
-2. **Given** a public link for Tenant A, **When** an unauthenticated visitor opens it, **Then** the rendered page contains only the project's name, its 3D model, and a thumbnail — no tenant ID, internal IDs, or other tenants' data.
-3. **Given** a user from Tenant B, **When** they attempt to read or modify a project ID belonging to Tenant A, **Then** the system responds as if the project does not exist (no enumeration leak).
+Deferred. The simplified MVP is single-tenant with no authentication. Public links remain unguessable; internal project IDs MUST NOT appear in public URLs.
 
 ---
 
 ### Edge Cases
 
-- **Oversized file**: a user uploads an `.ifc` larger than the configured limit. The upload must be rejected before the file is fully transferred (or buffered) and the user must see a clear "file too large" message.
-- **Wrong file type**: a user uploads a `.pdf` or `.jpg` renamed to `.ifc`. The system must validate the file signature (not just the extension) and reject the upload with a clear message.
+- **Oversized file**: a user uploads an `.ifc` or `.skp` larger than the configured limit. The upload must be rejected before the file is fully transferred (or buffered) and the user must see a clear "file too large" message.
+- **Wrong file type**: a user uploads a `.pdf` or `.jpg` renamed to `.ifc` or `.skp`. The system must validate the file signature (not just the extension) and reject the upload with a clear message.
+- **SKP with unsupported SketchUp features**: conversion may succeed with simplified geometry or materials; the user sees a warning or generic "partial conversion" message rather than a silent broken viewer.
+- **USDZ generation failure**: iPhone AR requires a valid USDZ; if USDZ generation fails, the project is marked `failed` and AR on iOS is not offered.
 - **Conversion never finishes / worker dies**: the project is stuck in "processing". The system must have a timeout/recovery policy that marks the project as "failed" after a configurable deadline and surfaces that to the user.
 - **Network interruption mid-upload**: partial files must not be treated as valid uploads; on retry the user should not see a corrupted state.
 - **Same public link opened twice simultaneously**: both viewers should work independently.
@@ -119,69 +113,69 @@ Projects, files, and public links are scoped to a tenant (the architect's accoun
 
 **Project lifecycle**
 
-- **FR-001**: The system MUST let an authenticated user create a project with a name, optional description, and optional client label.
-- **FR-002**: The system MUST let an authenticated user upload a single `.ifc` file as part of creating or updating a project.
-- **FR-003**: The system MUST validate that the uploaded file is an IFC file (by content signature, not only by extension) and reject invalid files with a user-readable message before persisting them.
+- **FR-001**: The system MUST accept a model upload via a public upload page without requiring authentication.
+- **FR-002**: The system MUST accept a single `.ifc` or `.skp` file per upload.
+- **FR-003**: The system MUST validate uploaded files by content signature (not extension alone) and reject invalid files with a user-readable message before persisting them.
 - **FR-004**: The system MUST enforce a maximum file size per upload and reject oversized uploads with a clear message.
-- **FR-005**: The system MUST persist the original uploaded file in durable object storage, scoped to the project.
-- **FR-006**: The system MUST track the project lifecycle through these states: `upload-received`, `processing`, `ready-to-publish`, `published`, `failed`. Transitions are monotonic except for `processing → failed`.
+- **FR-005**: The system MUST persist artifacts under **`/data/projects/{projectId}/`** on local filesystem storage with these filenames: `original.ifc` or `original.skp` (matching upload format), `model.glb`, `model.usdz`, and **`thumbnail.webp`**.
+- **FR-006**: The system MUST track the project lifecycle through these states: `upload-received`, `processing`, `ready`, `failed`. A successful conversion automatically yields a shareable public link (no separate publish step).
 
 **Conversion**
 
-- **FR-007**: The system MUST convert each uploaded `.ifc` file into a 3D model in a web- and AR-friendly format (`glb`) asynchronously, without blocking the upload HTTP request.
-- **FR-008**: The system MUST generate a thumbnail preview image (web-friendly format) from the model during conversion.
+- **FR-007**: The system MUST convert each uploaded source file into GLB asynchronously, without blocking the upload HTTP response.
+- **FR-007a**: IFC uploads MUST be converted via IfcOpenShell (`IfcConvert` or equivalent).
+- **FR-007b**: SKP uploads MUST be converted via **Blender headless direct import/export: SKP → GLB** (native SKP import + glTF 2.0 export). No DAE intermediate step and no Assimp in the primary path.
+- **FR-007c**: The system MUST generate a USDZ from GLB for iPhone Quick Look AR; USDZ generation failure MUST mark the project `failed`.
+- **FR-008**: The system MUST generate a **`thumbnail.webp`** preview image from the converted model during conversion (Blender headless render).
 - **FR-009**: The system MUST handle conversion failures by transitioning the project to `failed` with a user-readable reason and MUST NOT generate a public link for a failed project.
-- **FR-010**: The conversion pipeline MUST be abstracted behind a single internal interface so that future input formats (SKP, RVT, DWG, DXF, OBJ, STL, DAE, FBX) can be added without changing upload or share flows. The MVP MUST NOT implement those formats — only the abstraction.
+- **FR-010**: The conversion pipeline MUST be abstracted behind a single internal interface (`IModelConversionService` or equivalent) that detects input format, runs the appropriate converter, and produces GLB + USDZ + thumbnail. Adding a future format MUST require only a new converter implementation — no change to upload or viewer flows. All conversion tooling (IfcOpenShell, Blender, USDZ, thumbnail) runs in a **single converter sidecar** invoked by the backend.
 
 **Sharing**
 
-- **FR-011**: The system MUST let an authenticated user publish a project whose state is `ready-to-publish` and generate a public URL plus a QR code image in response.
+- **FR-011**: On successful conversion, the system MUST generate a public URL and a QR code image automatically.
 - **FR-012**: The system MUST generate the QR code from the public URL automatically (no manual QR upload).
-- **FR-013**: The system MUST make publishing idempotent: publishing an already-published project returns the same link/QR, it does not create a second one.
 - **FR-014**: Public URLs MUST be non-sequential and unguessable (e.g., GUID/ULID or equivalent entropy) and MUST NOT expose internal database IDs.
 - **FR-015**: The public page MUST be reachable without authentication and MUST NOT require any account to view the 3D model or thumbnail.
+- **FR-015a**: Asset URLs (GLB, USDZ, thumbnail) MUST be served directly (HTTP 200, correct Content-Type, no redirects) — required for iPhone Quick Look. Thumbnail Content-Type: `image/webp`.
 
 **3D viewing & AR**
 
-- **FR-016**: The public page MUST render the 3D model with orbit, zoom, pan, and fullscreen controls.
+- **FR-016**: The public page MUST render the 3D model with orbit, zoom, pan, fullscreen, and auto-rotate controls.
 - **FR-017**: The public page MUST show a thumbnail preview while the 3D model is loading.
-- **FR-018**: The public page MUST offer an "Open in AR" / "View in your space" action on supported devices that hands the model off to the device's native AR experience at real-world scale.
+- **FR-018**: The public page MUST offer an "Open in AR" / "View in your space" action on supported devices that hands the model off to the device's native AR experience at real-world scale (Scene Viewer on Android, Quick Look on iOS via USDZ).
 - **FR-019**: On devices without AR capability the public page MUST degrade gracefully: the 3D viewer must remain fully functional and the AR option MUST be hidden or clearly disabled — never shown as a broken button.
-- **FR-020**: The 3D viewer MUST NOT include any BIM/engineering features (no properties tree, no element metadata, no clash detection, no measurement tools). It is a viewer, not a CAD tool.
+- **FR-020**: The 3D viewer MUST NOT include any BIM/engineering features (no spatial tree, no element properties, no classification, no clash detection, no measurement tools). Focus is geometry, materials, textures, and AR only.
 
-**Dashboard**
+**Dashboard *(out of scope — MVP)***
 
-- **FR-021**: An authenticated user MUST be able to list their projects, with name, creation date, current status, and thumbnail.
-- **FR-022**: An authenticated user MUST be able to open a project detail view showing its current state, the generated thumbnail, and the generated 3D asset.
-- **FR-023**: An authenticated user MUST be able to copy the public link and download/display the QR code from the project detail or share view.
+- **FR-021–FR-023**: Deferred. No authenticated dashboard, project list, or manual publish action in the simplified MVP.
 
-**Security & isolation**
+**Security & isolation *(simplified — MVP)***
 
-- **FR-024**: Projects, files, and links MUST be scoped to a tenant. A user MUST NOT be able to read or modify another tenant's data.
-- **FR-025**: The public page MUST expose only the minimum data required to render the model and thumbnail; it MUST NOT expose internal IDs, tenant IDs, or any other tenant's data.
-- **FR-026**: The system MUST validate that an authenticated API request is allowed to act on a given project before returning or mutating it.
+- **FR-025**: The public page MUST expose only the minimum data required to render the model and thumbnail; it MUST NOT expose internal IDs or stack traces.
+- **FR-024, FR-026**: Deferred (multi-tenant auth). Public links remain unguessable as the primary access control.
 
 **Observability & errors**
 
-- **FR-027**: The system MUST emit structured logs for upload, conversion lifecycle events, publishing, and errors, correlated by a request / job correlation ID.
-- **FR-028**: The system MUST surface user-readable error messages to dashboard and public page users, and MUST NOT leak stack traces or internal exception details in those messages.
+- **FR-027**: The system MUST emit structured logs for upload, conversion lifecycle events, and errors, correlated by a request / job correlation ID.
+- **FR-028**: The system MUST surface user-readable error messages on the upload and public pages, and MUST NOT leak stack traces or internal exception details in those messages.
 
-**Extensibility (architecture only — no implementation of additional formats in MVP)**
+**Extensibility**
 
-- **FR-029**: The conversion pipeline MUST be implemented as an abstraction that accepts a single source model and produces a web/AR-ready output plus a thumbnail. Adding a new input format MUST require implementing a new converter and registering it — no change to the upload, share, or viewer code.
-- **FR-030**: The MVP MUST support only IFC. Other formats are explicitly out of scope for implementation but the architecture MUST NOT block them.
+- **FR-029**: The conversion pipeline MUST accept a single source model and produce GLB, USDZ, and thumbnail. New input formats require only a new converter registration.
+- **FR-030**: The MVP MUST support `.ifc` and `.skp` only. Other formats (RVT, DWG, DXF, OBJ, STL, DAE, FBX) are explicitly out of scope but the architecture MUST NOT block them.
 
 **Explicit non-goals (to prevent scope creep)**
 
 - **FR-031**: The product MUST NOT present itself as a BIM platform, BIM collaboration tool, BIM coordination tool, BIM metadata manager, or engineering suite. Any UI, copy, docs, or marketing surfaces generated by this product MUST avoid those terms and use neutral wording (e.g., "3D model", "architecture", "interior design", "custom furniture").
 - **FR-032**: The MVP MUST NOT support editing, version control, comments, annotations, or multi-user collaboration on the 3D model.
-- **FR-033**: The MVP MUST NOT support multiple input formats. Only `.ifc` is accepted.
+- **FR-033**: The MVP MUST NOT support authentication, multi-tenancy, object storage (MinIO/S3), or a project dashboard.
 
 ### Key Entities *(include if feature involves data)*
 
-- **Project**: a single 3D sharing unit. Belongs to one tenant. Has a name, optional description, optional client label, current status, and timestamps (created, updated, published). One project has zero or one source file and zero or one generated 3D asset.
-- **ProjectFile**: the durable, stored artifacts associated with a project — the original uploaded file, the generated 3D model, and the generated thumbnail. Persisted in object storage, referenced from the project record by storage path.
-- **ShareLink**: a public, non-sequential, unguessable token bound to a published project. Resolves to a public viewer page. Has a creation timestamp and the project it points to. The QR code image is derived from this token's public URL.
+- **Project**: a single 3D sharing unit. Has a source format (`ifc` | `skp`), current status, public token, and timestamps. One project has one source file and generated artifacts (GLB, USDZ, thumbnail).
+- **ProjectFile**: durable artifacts at `/data/projects/{projectId}/` — `original.ifc|skp`, `model.glb`, `model.usdz`, `thumbnail.webp`. Referenced from the project record by relative path within the data volume.
+- **ShareLink**: a public, non-sequential, unguessable token bound to a ready project. Resolves to the public viewer page. QR code is derived from this token's public URL.
 
 ---
 
@@ -191,25 +185,27 @@ Outcomes are measured from the architect's and client's perspective, not from sy
 
 ### Measurable Outcomes
 
-- **SC-001**: An architect can go from "open dashboard" to "client has a working public link" in under 5 minutes for a typical 50 MB `.ifc` file on a standard broadband connection (≤ 200 ms latency, ≥ 10 Mbps up), measured from the moment they click "New project" to the moment the public page renders the 3D model on the client's phone.
-- **SC-002**: 100% of valid `.ifc` uploads of size ≤ 100 MB complete conversion (no project left stuck in `processing` beyond the configured timeout) on the first attempt in a healthy environment.
-- **SC-003**: 100% of published projects' public links load in a modern mobile browser (Chrome on Android 10+ and Safari on iOS 15+) in under 10 seconds on a 4G connection, showing the thumbnail first and the 3D model second.
-- **SC-004**: 100% of public pages on supported AR-capable mobile devices offer a working "Open in AR" handoff that places the model in the real environment at real-world scale; on unsupported devices the option is hidden and the 3D viewer still works.
+- **SC-001**: A user can go from "open upload page" to "client has a working public link" in under 5 minutes for a typical 50 MB `.ifc` or `.skp` file on standard broadband (≤ 200 ms latency, ≥ 10 Mbps up).
+- **SC-002**: 100% of valid `.ifc` and `.skp` uploads of size ≤ 100 MB complete conversion (no project stuck in `processing` beyond the configured timeout) on the first attempt in a healthy environment.
+- **SC-003**: 100% of public links load in a modern mobile browser (Chrome on Android 10+ and Safari on iOS 15+) in under 10 seconds on 4G, showing the thumbnail first and the 3D model second.
+- **SC-004**: 100% of public pages on supported AR-capable mobile devices offer a working "Open in AR" handoff (Android Scene Viewer + iOS Quick Look via USDZ); on unsupported devices the option is hidden and the 3D viewer still works.
 - **SC-005**: Public links are unguessable: guessing 1,000,000 random URLs has effectively 0% chance of returning a valid public page.
-- **SC-006**: 100% of attempts by a user from Tenant B to read, modify, or guess a project belonging to Tenant A return a "not found" response with no data leakage.
-- **SC-007**: The end-to-end flow (create → upload → conversion → publish → public page loads → AR handoff) can be demonstrated and passes automated end-to-end tests on a clean local environment using only the documented setup commands.
-- **SC-008**: The product surfaces in UI, copy, documentation, and logs use the term "3D model" / "architecture / interior / furniture" and contain zero occurrences of "BIM platform", "BIM collaboration", "BIM coordination", "BIM metadata", "BIM management", or "BIM engineering".
+- **SC-006**: *(Deferred — multi-tenant)* Replaced for MVP by SC-005 unguessable tokens.
+- **SC-007**: The end-to-end flow (upload → conversion → public page loads → AR handoff) passes automated tests on a clean local environment via `docker compose up`.
+- **SC-008**: UI, copy, and docs use "3D model" / "architecture / interior / furniture" and contain zero occurrences of "BIM platform", "BIM collaboration", "BIM coordination", "BIM metadata", "BIM management", or "BIM engineering".
+- **SC-009**: SKP uploads with standard SketchUp materials and textures render with recognizable colors and textures in the web viewer (best-effort; not pixel-perfect parity with SketchUp desktop).
 
 ---
 
 ## Assumptions
 
 - **Users have stable broadband**. Upload, conversion, and viewing assume a connection that can sustain tens of MB transfers; the system is not designed for offline use.
-- **One model per project in MVP**. A project carries a single source file. Multi-file or multi-revision workflows are out of scope for MVP.
-- **Authentication is required for the dashboard, not for the public page**. Tenant boundaries exist for paying customers, but the MVP does not need a full auth system UI to validate the market — a minimum viable sign-in is enough.
-- **IfcOpenShell / IfcConvert is available in the conversion environment**. The conversion worker has the tooling required to turn IFC into GLB. The MVP does not need to convert other formats.
-- **Object storage is available in the environment**. Files (uploaded IFC, generated GLB, thumbnail, QR code) are stored in durable object storage, not on local disk.
+- **One model per upload in MVP**. Multi-file or multi-revision workflows are out of scope.
+- **No authentication in MVP**. Upload page and public viewer are open; access control is via unguessable public tokens only.
+- **IfcOpenShell and Blender headless are available in the conversion environment**. IFC via IfcConvert; SKP via Blender direct SKP→GLB (same Blender runtime also used for thumbnail rendering).
+- **USDZ via `usd_from_gltf`** (or equivalent) is available for GLB→USDZ conversion required by iPhone Quick Look.
+- **Local filesystem storage at `/data/projects/{projectId}/`**. Files live on a shared Docker volume (`project_data:/data`), not in object storage / MinIO / S3.
+- **Single converter sidecar in Docker Compose**. One `converter` service (Python) bundles IfcOpenShell, Blender headless, `usd_from_gltf`, and thumbnail rendering. Compose stack: `postgres`, `backend`, `converter`, `frontend` (+ nginx). No separate IFC/SKP worker containers.
 - **The conversion worker is separate from the HTTP API**. Conversion runs out-of-band and does not block the upload response.
-- **Mobile devices are the primary AR target**. The desktop experience is 3D-viewer only; AR is mobile-first.
-- **The "project" lifecycle is a simple state machine**. No complex workflows (review, approval, scheduled publish, expiry) are in scope for MVP.
-- **The current repository's existing code is treated as a starting point that may be substantially rewritten**. The MVP scope is narrow and the product is repositioned away from "BIM viewer"; significant code paths in the existing repo may not survive the migration. Specific GAP analysis and migration plan are produced by downstream planning, not by this spec.
+- **Mobile devices are the primary AR target**. Desktop is 3D-viewer only; AR is mobile-first.
+- **HTTPS is required for AR** on mobile browsers.

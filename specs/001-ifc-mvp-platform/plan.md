@@ -1,81 +1,74 @@
-# Implementation Plan: Arch3DAR — Correção MVP IFC → AR (Android + iPhone)
+# Implementation Plan: Arch3DAR — IFC/SKP → Web 3D + AR MVP
 
-**Branch**: `main` | **Date**: 2026-06-10 | **Spec**: [spec.md](spec.md) (correção MVP — ver **Correction Scope** abaixo)
+**Branch**: `main` | **Date**: 2026-06-10 | **Spec**: [spec.md](spec.md)
 
-**Input**: Correção do fluxo AR no iPhone, remoção de MinIO/S3, armazenamento local, geração USDZ e simplificação do sistema.
-
-## Correction Scope (supersedes portions of spec.md)
-
-O projeto já funciona para visualização Web e AR no Android. O iPhone falha com *"Object could not be opened"* no Quick Look. A causa raiz é a combinação de:
-
-1. Ausência de `ios-src` apontando para um USDZ válido (ou USDZ malformado).
-2. Entrega de assets via presigned MinIO URLs (redirects / hostnames incompatíveis com Quick Look).
-3. Content-Type incorreto ou ausente para `.glb` / `.usdz`.
-
-Esta correção **remove** do escopo ativo:
-
-- MinIO, S3, object storage, buckets, abstrações de storage distribuído
-- Autenticação, usuários, dashboard, multi-tenant, publish idempotente em duas etapas
-
-Esta correção **mantém**:
-
-- Upload IFC → conversão GLB + USDZ + thumbnail
-- Link público + QR Code
-- Visualização Web (`<model-viewer>`)
-- AR Android (Scene Viewer) e iPhone (Quick Look)
+**Input**: SpecDrive sobre correção ativa — MVP simplificado (sem auth), upload `.ifc` ou `.skp`, conversão GLB + USDZ + thumbnail WebP, link público, AR Android + iPhone.
 
 ## Summary
 
-Arch3DAR passa a ser um MVP mínimo: upload de IFC, conversão síncrona no sidecar Python (IfcConvert → GLB → `usd_from_gltf` → USDZ), persistência em disco local (`/data/projects/{projectId}/`), e entrega direta de arquivos pelo backend/nginx sem redirects. O frontend tem duas páginas (`UploadPage`, `ViewerPage`/`SharePage`) com `<model-viewer>` configurado com `ios-src` obrigatório. PostgreSQL permanece apenas para metadados do projeto (token público, status, paths relativos). Nenhum serviço MinIO no `docker-compose`.
+Arch3DAR é uma plataforma mínima de compartilhamento 3D/AR para arquitetura (não BIM): upload de IFC ou SKP, conversão no sidecar Python único, persistência local em `/data/projects/{projectId}/`, entrega direta de assets (sem redirect), viewer web com `@google/model-viewer` e AR nativo (Scene Viewer + Quick Look).
+
+**Pipelines**:
+
+```
+IFC:  original.ifc → IfcConvert → glb_normalize → usd_from_gltf → model.usdz
+                                    └→ Blender render → thumbnail.webp
+
+SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → usd_from_gltf → model.usdz
+                                    └→ Blender render → thumbnail.webp
+```
+
+**Stack**: ASP.NET Core 9, PostgreSQL 16, Python/FastAPI converter (IfcOpenShell + Blender + `usd_from_gltf`), React/Vite, nginx, Docker Compose (4 serviços, sem MinIO).
 
 ## Technical Context
 
-**Language/Version**: C# 13 / .NET 9 (`net9.0`) backend; TypeScript 5 / React 18 + Vite frontend; Python 3.11 converter sidecar.
+**Language/Version**: C# 13 / .NET 9; TypeScript 5 / React 18 + Vite; Python 3.11; Blender 4.2 LTS (headless).
 
 **Primary Dependencies**:
-- Backend: EF Core 9 + Npgsql, Serilog, QRCoder, Kestrel static file middleware (custom content-types).
+- Backend: EF Core 9 + Npgsql, Serilog, QRCoder, `LocalFileStorage`, `HttpModelConverter`, `ModelContentTypeMiddleware`.
 - Frontend: `@google/model-viewer@3.3`, `react-router-dom@6`.
-- Converter: IfcOpenShell `IfcConvert`, **Google `usd_from_gltf`** (GLB→USDZ), Pillow (thumbnail fallback).
-- Infra: nginx (TLS termination + reverse proxy), Docker Compose.
+- Converter: IfcOpenShell `IfcConvert`, **Blender 4.2** (SKP→GLB + thumbnail WebP), **`usd_from_gltf`**, `glb_normalize.py`, FastAPI/uvicorn.
+- Infra: nginx (TLS + reverse proxy), Docker Compose.
 
 **Storage**:
-- **Local filesystem** (Docker volume `project_data` → `/data`):
-  ```
-  /data/projects/{projectId}/
-    original.ifc
-    model.glb
-    model.usdz
-    thumbnail.png
-  ```
-- PostgreSQL 16: tabela `projects` com paths relativos e `public_token` (hex, 32 chars).
-- **Nenhum** MinIO, S3, presigned URL, bucket.
+```
+/data/projects/{projectId}/
+  original.ifc | original.skp
+  model.glb
+  model.usdz
+  thumbnail.webp
+```
+- PostgreSQL 16: `projects` (token público, status, `source_format`, paths relativos).
+- Volume Docker `project_data:/data` compartilhado entre `backend` e `converter`.
 
 **Testing**:
-- Backend integration: upload IFC → assert GLB/USDZ exist on disk → GET `/files/{id}/model.glb` e `/files/{id}/model.usdz` retornam 200 com Content-Type correto, sem redirect.
-- Converter unit: GLB sample → USDZ non-empty, zip válido.
-- Frontend: Vitest para props do `ModelViewer` (`ios-src` presente quando `usdzUrl` definido).
-- Manual checklist (quickstart §8): Android + iPhone AR via QR e link direto.
+- Backend integration: upload IFC + SKP → artefatos no disco → GET `/files/...` 200, Content-Type correto, sem redirect.
+- Converter unit: `glb_normalize`, `usd_converter`, `skp_to_glb` (fixture SKP pequeno).
+- Frontend: Vitest — `ios-src`, poster WebP, admin boundary.
+- Manual: quickstart §6 — AR Android + iPhone.
 
-**Target Platform**: Linux server (Docker). Clientes: Safari iOS 15+, Chrome Android 10+ (ARCore). Quick Look exige HTTPS válido.
+**Target Platform**: Linux amd64 (Docker). Clientes: Safari iOS 15+, Chrome Android 10+ (ARCore). Quick Look exige HTTPS válido.
 
-**Project Type**: Web application simplificada (2 páginas + API mínima).
+**Project Type**: Web application (2 páginas: upload + share viewer).
 
 **Performance Goals**:
-- Upload + conversão síncrona: ≤ 5 min para IFC ~50 MB (mesmo SC-001, fluxo único).
-- GET `/files/...` p95 < 50 ms (servido localmente, sem proxy S3).
-- Página pública carrega thumbnail + GLB em < 10 s em 4G.
+- Upload + conversão: ≤ 5 min para arquivo ~50 MB (SC-001).
+- GET `/files/...` p95 < 50 ms.
+- Página pública: thumbnail + GLB < 10 s em 4G (SC-003).
+- SKP via Blender: timeout estendido aceitável até 180 s (env `SKP_CONVERSION_TIMEOUT_S`).
 
 **Constraints**:
-- Max upload 100 MB (env `MAX_IFC_MB`).
-- Conversão timeout 120 s (env `CONVERSION_TIMEOUT_S`).
-- **Sem redirects** (302/307/308) em URLs de assets — Quick Look falha com redirect.
-- Content-Type obrigatório: `model/gltf-binary` (GLB), `model/vnd.usdz+zip` (USDZ), `image/png` (thumbnail).
-- HTTPS obrigatório para AR; banner no frontend quando `location.protocol !== 'https:'`.
-- USDZ obrigatório para marcar projeto `ready`; falha na geração USDZ = projeto `failed`.
+- Max upload 100 MB (`MAX_UPLOAD_MB`) — IFC e SKP.
+- Timeout IFC: 120 s (`IFC_CONVERSION_TIMEOUT_S`); SKP: 180 s (`SKP_CONVERSION_TIMEOUT_S`).
+- Sem redirects em URLs de assets (Quick Look).
+- Content-Type: `model/gltf-binary`, `model/vnd.usdz+zip`, `image/webp`.
+- USDZ obrigatório — falha = projeto `Failed`.
+- HTTPS obrigatório para AR.
+- Open source only — sem Forge/APS.
 
 **Scale/Scope**:
-- 1 upload por vez aceitável no MVP; sem fila distribuída.
-- Endpoints finais: `POST /upload`, `GET /viewer/{id}`, `GET /files/{id}/model.glb`, `GET /files/{id}/model.usdz`, `GET /files/{id}/thumbnail.png`, `GET /qrcode/{id}`, `GET /health`.
+- Conversão síncrona no upload (sem fila distribuída).
+- Endpoints: `POST /upload`, `GET /share/{token}`, `GET /files/{id}/model.glb|model.usdz|thumbnail.webp`, `GET /share/{token}/qr`, `GET /health`.
 
 ## Constitution Check
 
@@ -83,15 +76,15 @@ Arch3DAR passa a ser um MVP mínimo: upload de IFC, conversão síncrona no side
 
 | Principle | Status | Evidence |
 |---|---|---|
-| **I. Clean Code & MVP Pragmatism** | ✅ Pass | Remoção de MinIO, auth e dashboard reduz superfície. Filesystem + EF é o mínimo para metadados. `usd_from_gltf` escolhido por compatibilidade iOS, não por abstração prematura. |
-| **II. Meaningful Naming & Structure** | ✅ Pass | `LocalFileStorage`, `UsdConverter`, paths `projects/{id}/model.glb`. Endpoints espelham paths de disco. |
-| **III. Small Units & Single Responsibility** | ✅ Pass | `LocalFileStorage` (I/O disco), `UsdConverter` (GLB→USDZ), endpoints finos em `Program.cs` ou `Api/Endpoints/`. |
-| **IV. Tests Mirror Structure** | ✅ Pass | Testes em `app/tests/backend/Integration/` para pipeline upload→files; `app/tests/frontend/Unit/` para model-viewer props. |
-| **V. Self-Documenting Code & Minimal Comments** | ✅ Pass | Comentários apenas em middleware de Content-Type e restrição "no redirect". |
+| **I. Clean Code & MVP Pragmatism** | ✅ Pass | Sidecar único evita microserviços por formato. Auth/dashboard removidos. Blender só entra onde SKP exige. |
+| **II. Meaningful Naming & Structure** | ✅ Pass | `SourceFormat`, `SkpConverter`, `IfcConverter`, paths espelham disco. |
+| **III. Small Units & Single Responsibility** | ✅ Pass | `LocalFileStorage`, `UsdConverter`, `SkpToGlbScript`, `ThumbnailRenderer` separados no converter. |
+| **IV. Tests Mirror Structure** | ✅ Pass | `app/tests/backend/Integration/`, `app/converter/test_*.py`, `app/frontend/src/__tests__/`. |
+| **V. Self-Documenting Code & Minimal Comments** | ✅ Pass | Comentários só em MIME middleware e scripts Blender headless. |
 
-**Route Boundary update**: Com remoção do dashboard, a fronteira admin/público simplifica para `UploadPage` (sem model-viewer) vs `SharePage`/`ViewerPage` (único lugar com AR). O canary `adminBoundary.test.ts` permanece válido.
+**Route Boundary**: `HomePage`/`UploadPage` sem model-viewer; `SharePage` (`/s/:token`) único lugar com AR. Canary `adminBoundary.test.ts` permanece.
 
-**Constitution re-check after Phase 1 design**: All 5 principles pass. Simplificação alinha com MVP-pragmatism.
+**Constitution re-check after Phase 1 design**: All 5 principles pass.
 
 ## Project Structure
 
@@ -100,12 +93,12 @@ Arch3DAR passa a ser um MVP mínimo: upload de IFC, conversão síncrona no side
 ```text
 specs/001-ifc-mvp-platform/
 ├── plan.md              # This file
-├── research.md          # Phase 0 — decisões corrigidas (local storage, USDZ, Quick Look)
-├── data-model.md        # Phase 1 — Project simplificado, filesystem layout
+├── research.md          # R-11…R-20 (storage, USDZ, SKP, Blender, WebP)
+├── data-model.md        # Project + filesystem layout
 ├── contracts/
-│   └── openapi.md       # Phase 1 — API mínima sem auth/MinIO
-├── quickstart.md        # Phase 1 — validação E2E + checklist manual AR
-└── spec.md              # Spec original (parcialmente superseded por Correction Scope)
+│   └── openapi.md       # HTTP + converter sidecar
+├── quickstart.md        # E2E IFC + SKP + AR checklist
+└── spec.md
 ```
 
 ### Source Code (repository root)
@@ -114,63 +107,148 @@ specs/001-ifc-mvp-platform/
 app/
 ├── backend/
 │   ├── Domain/
-│   │   ├── Project.cs
+│   │   ├── Project.cs              # + SourceFormat (Ifc|Skp)
 │   │   └── ProjectStatus.cs
 │   ├── Infrastructure/
-│   │   ├── AppDbContext.cs
-│   │   ├── LocalFileStorage.cs      # NEW: read/write /data/projects/{id}/*
-│   │   ├── ModelContentTypeMiddleware.cs  # NEW: GLB/USDZ MIME
-│   │   ├── HttpModelConverter.cs
+│   │   ├── LocalFileStorage.cs
+│   │   ├── ModelContentTypeMiddleware.cs   # + image/webp
+│   │   ├── HttpModelConverter.cs           # passes sourceFormat to sidecar
 │   │   ├── QrCodeService.cs
 │   │   └── CorrelationIdMiddleware.cs
-│   ├── Program.cs                   # POST /upload, GET /files/*, GET /viewer/*
-│   └── Dockerfile
+│   ├── Services/
+│   │   ├── IFileStorageService.cs
+│   │   ├── IModelConversionService.cs      # abstraction FR-010
+│   │   ├── IThumbnailService.cs            # contract (implemented in converter)
+│   │   └── IPublicLinkService.cs
+│   └── Program.cs
 │
 ├── converter/
-│   ├── converter_service.py         # IfcConvert + usd_from_gltf (UsdConverter)
-│   ├── usd_converter.py             # NEW: subprocess wrapper usd_from_gltf
+│   ├── converter_service.py        # routes by format
+│   ├── ifc_pipeline.py             # IfcConvert path
+│   ├── skp_to_glb.py               # Blender headless script
+│   ├── render_thumbnail.py         # Blender → thumbnail.webp
+│   ├── glb_normalize.py
+│   ├── usd_converter.py
 │   ├── requirements.txt
-│   └── Dockerfile                   # bake usd_from_gltf binary
+│   └── Dockerfile                  # + Blender 4.2 LTS
 │
 ├── frontend/
-│   ├── src/
-│   │   ├── pages/
-│   │   │   ├── HomePage.tsx         # UploadPage
-│   │   │   └── SharePage.tsx        # ViewerPage com ios-src
-│   │   └── App.tsx
-│   └── nginx.conf                   # proxy /api + /files sem redirect
+│   └── src/
+│       ├── pages/
+│       │   ├── HomePage.tsx        # upload .ifc | .skp
+│       │   └── SharePage.tsx       # model-viewer + AR
+│       └── components/
+│           └── ModelViewer.tsx
 │
-├── nginx/                           # TLS termination, proxy_pass direto
-├── docker-compose.yml               # 4 services: postgres, backend, converter, frontend+nginx
-│                                    # NO minio
+├── docker-compose.yml              # postgres, converter, backend, frontend+nginx
 └── tests/
     ├── backend/Integration/
-    └── frontend/Unit/
+    └── frontend/
 ```
 
-**Structure Decision**: Mantém layout `app/{backend,frontend,converter,tests}/`. Remove serviço `minio` e código `MinioService`. Volume compartilhado `project_data:/data` entre `backend` e `converter`.
+**Structure Decision**: Mantém `app/{backend,frontend,converter,tests}/`. Um sidecar `converter` com IfcOpenShell + Blender + USDZ. Volume `/data` compartilhado.
+
+## Architecture
+
+### System context
+
+```mermaid
+flowchart TB
+  User[Architect / Client]
+  FE[React SPA + nginx]
+  BE[ASP.NET Core API]
+  CV[Python Converter Sidecar]
+  PG[(PostgreSQL)]
+  FS[Local FS /data/projects]
+
+  User --> FE
+  FE --> BE
+  BE --> PG
+  BE --> CV
+  BE --> FS
+  CV --> FS
+```
+
+### Conversion flow
+
+```mermaid
+flowchart LR
+  subgraph Upload
+    U[POST /upload]
+  end
+  subgraph Detect
+    D{format?}
+  end
+  subgraph IFC
+    I1[IfcConvert]
+  end
+  subgraph SKP
+    S1[Blender SKP import]
+    S2[Blender GLB export]
+  end
+  subgraph Common
+    N[glb_normalize]
+    Z[usd_from_gltf]
+    T[Blender thumbnail.webp]
+  end
+  U --> D
+  D -->|ifc| I1 --> N
+  D -->|skp| S1 --> S2 --> N
+  N --> Z
+  N --> T
+```
+
+### Backend services (interfaces)
+
+| Interface | Responsibility |
+|---|---|
+| `IFileStorageService` | CRUD paths under `/data/projects/{id}/` |
+| `IModelConversionService` | Detect format, invoke converter sidecar, update status |
+| `IThumbnailService` | Contract for thumbnail generation (delegated to converter) |
+| `IPublicLinkService` | Generate token, share URL, QR SVG |
+
+## Implementation Phases
+
+### Phase A — IFC correction (in progress)
+
+Completar correção Quick Look iPhone + storage local (ver Migration below). Garantir IFC E2E antes de SKP.
+
+### Phase B — SKP support
+
+1. Adicionar Blender 4.2 LTS ao Dockerfile do converter.
+2. Implementar `skp_to_glb.py` (Blender batch: import SKP → export glTF binary).
+3. Estender `POST /convert` com campo `sourceFormat` (`ifc`|`skp`).
+4. Backend: validação magic bytes SKP, `SourceFormat` column, aceitar `.skp` no upload UI.
+5. Testes: fixture SKP mínimo + integration upload SKP.
+
+### Phase C — Thumbnail WebP
+
+1. Substituir Pillow/IfcConvert thumbnail por `render_thumbnail.py` (Blender headless).
+2. Migrar endpoints e middleware para `thumbnail.webp` / `image/webp`.
+3. Atualizar testes e quickstart.
 
 ## Complexity Tracking
 
-Nenhuma violação da constituição. A remoção de MinIO e auth **reduz** complexidade em relação ao plano anterior.
+Nenhuma violação da constituição. Blender no sidecar é justificado pela clarificação SpecDrive (SKP→GLB direto + thumbnail único).
 
 ## Migration from current state (ordered)
 
-1. **Converter**: trocar upload MinIO por escrita em `/data/projects/{id}/`; substituir trimesh+OpenUSD por `usd_from_gltf`; falhar se USDZ vazio.
-2. **Backend**: remover `Minio` package, `MinioService`, presigned URLs; adicionar `LocalFileStorage` + endpoints `GET /files/{projectId}/{file}` com `Results.File()` (sem redirect).
-3. **Share API**: retornar URLs absolutas same-origin (`https://host/files/{id}/model.glb`) em vez de presigned MinIO.
-4. **docker-compose**: remover `minio` service/volume; montar `project_data:/data` em backend + converter.
-5. **nginx**: `location /files/` → `proxy_pass http://backend:5000/files/` sem `return 302`; validar `proxy_redirect off`.
-6. **Frontend**: garantir `ios-src={usdzUrl}` e `ar-modes="quick-look scene-viewer webxr"`; esconder AR se `usdzUrl` null.
-7. **Tests**: integration sem Testcontainers MinIO; assert Content-Type e ausência de `Location` header.
-8. **Cleanup**: deletar referências MinIO em `.env.example`, README, specs antigas.
+1. **IFC correction** (em andamento): local storage, `usd_from_gltf`, `glb_normalize`, sem MinIO, `ios-src`.
+2. **Backend**: `SourceFormat` enum; upload aceita `.skp`; validação signature; `MAX_UPLOAD_MB`.
+3. **Converter Dockerfile**: instalar Blender 4.2 LTS + dependências SKP (libGL, Xvfb opcional).
+4. **Converter code**: `ifc_pipeline.py`, `skp_to_glb.py`, `render_thumbnail.py`; router em `converter_service.py`.
+5. **Thumbnail migration**: `thumbnail.png` → `thumbnail.webp` em paths, middleware, frontend poster.
+6. **Frontend**: file input `accept=".ifc,.skp"`; mensagens de erro por formato.
+7. **Tests + quickstart**: cenários SKP; AR checklist para ambos formatos.
 
-## Acceptance Criteria (correction)
+## Acceptance Criteria
 
-1. IFC enviado via `POST /upload`.
-2. `model.glb` e `model.usdz` gerados em `/data/projects/{id}/`.
-3. QR Code gerado (`GET /qrcode/{token}`).
-4. Android abre AR (Scene Viewer).
-5. iPhone abre AR sem *"Object could not be opened"* (Quick Look).
-6. Nenhum serviço MinIO no projeto.
-7. Arquivos servidos diretamente (`200 OK`, Content-Type correto, sem redirect).
+1. Upload `.ifc` ou `.skp` via `POST /upload` ou HomePage.
+2. Artefatos em `/data/projects/{id}/`: original, `model.glb`, `model.usdz`, `thumbnail.webp`.
+3. Share URL + QR gerados automaticamente ao `Ready`.
+4. Viewer web: orbit, zoom, fullscreen, auto-rotate, poster WebP.
+5. Android AR (Scene Viewer) funciona.
+6. iPhone AR (Quick Look via USDZ) funciona sem "Object could not be opened".
+7. SKP com materiais/texturas: cores reconhecíveis no viewer (SC-009, best-effort).
+8. Zero MinIO; assets servidos diretamente (200, Content-Type correto, sem redirect).
+9. `docker compose up` sobe stack completa com Blender + IfcOpenShell.

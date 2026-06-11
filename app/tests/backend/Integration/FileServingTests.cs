@@ -22,7 +22,7 @@ public class FileServingTests : IClassFixture<WebAppFactory>
 
         await storage.WriteFileAsync(projectId, LocalFileStorage.GlbFileName, [0x67, 0x6C, 0x54, 0x46], CancellationToken.None);
 
-        var project = Project.Create(projectId, "a".PadRight(32, 'b'), "Test", 4, DateTimeOffset.UtcNow);
+        var project = Project.Create(projectId, "a".PadRight(32, 'b'), "Test", SourceFormat.Ifc, 4, DateTimeOffset.UtcNow);
         project.MarkReady(10, DateTimeOffset.UtcNow);
         db.Projects.Add(project);
         await db.SaveChangesAsync();
@@ -93,6 +93,25 @@ public class FileServingTests : IClassFixture<WebAppFactory>
     }
 
     [Fact]
+    public async Task Get_Thumbnail_Returns_200_With_WebP_ContentType()
+    {
+        var projectId = Guid.NewGuid();
+        using var scope = _factory.Services.CreateScope();
+        var storage = scope.ServiceProvider.GetRequiredService<LocalFileStorage>();
+
+        // Minimal RIFF/WEBP header bytes for serving test
+        var webpBytes = "RIFF"u8.ToArray().Concat(new byte[] { 0, 0, 0, 0 })
+            .Concat("WEBP"u8.ToArray()).ToArray();
+        await storage.WriteFileAsync(projectId, LocalFileStorage.ThumbnailFileName, webpBytes, CancellationToken.None);
+
+        var client = _factory.CreateClient();
+        var response = await client.GetAsync($"/files/{projectId}/{LocalFileStorage.ThumbnailFileName}");
+
+        response.StatusCode.Should().Be(System.Net.HttpStatusCode.OK);
+        response.Content.Headers.ContentType?.MediaType.Should().Be("image/webp");
+    }
+
+    [Fact]
     public async Task Share_Returns_SameOrigin_File_Urls()
     {
         var projectId = Guid.NewGuid();
@@ -105,7 +124,7 @@ public class FileServingTests : IClassFixture<WebAppFactory>
         await storage.WriteFileAsync(projectId, LocalFileStorage.UsdzFileName, [1], CancellationToken.None);
         await storage.WriteFileAsync(projectId, LocalFileStorage.ThumbnailFileName, [1], CancellationToken.None);
 
-        var project = Project.Create(projectId, token, "Chair", 1, DateTimeOffset.UtcNow);
+        var project = Project.Create(projectId, token, "Chair", SourceFormat.Ifc, 1, DateTimeOffset.UtcNow);
         project.MarkReady(1, DateTimeOffset.UtcNow);
         db.Projects.Add(project);
         await db.SaveChangesAsync();
@@ -117,6 +136,6 @@ public class FileServingTests : IClassFixture<WebAppFactory>
         json.Should().Contain($"https://test.local/files/{projectId}/model.glb");
         json.Should().Contain($"https://test.local/files/{projectId}/model.usdz");
         json.Should().NotContain(":9000");
-        json.Should().Contain("/files/");
+        json.Should().Contain($"https://test.local/files/{projectId}/thumbnail.webp");
     }
 }

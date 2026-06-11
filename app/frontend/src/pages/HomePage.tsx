@@ -5,9 +5,16 @@ const API_BASE = (import.meta.env.VITE_API_BASE_URL as string | undefined) ?? ''
 interface UploadResult {
   token: string;
   name: string;
+  sourceFormat: string;
   status: string;
   shareUrl: string;
   qrSvg: string;
+}
+
+const MODEL_EXT = /\.(ifc|skp)$/i;
+
+function defaultName(filename: string): string {
+  return filename.replace(MODEL_EXT, '');
 }
 
 export default function HomePage() {
@@ -22,7 +29,7 @@ export default function HomePage() {
   const onPick = (e: ChangeEvent<HTMLInputElement>) => {
     const f = e.target.files?.[0] ?? null;
     setFile(f);
-    if (f && !name) setName(f.name.replace(/\.ifc$/i, ''));
+    if (f && !name) setName(defaultName(f.name));
   };
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -31,7 +38,7 @@ export default function HomePage() {
     const f = e.dataTransfer.files?.[0];
     if (!f) return;
     setFile(f);
-    if (!name) setName(f.name.replace(/\.ifc$/i, ''));
+    if (!name) setName(defaultName(f.name));
   };
 
   const onSubmit = async (e: FormEvent) => {
@@ -39,7 +46,7 @@ export default function HomePage() {
     setError(null);
     setResult(null);
     if (!file) {
-      setError('Pick an .ifc file first.');
+      setError('Pick an .ifc or .skp file first.');
       return;
     }
     setBusy(true);
@@ -82,7 +89,7 @@ export default function HomePage() {
   return (
     <div className="container">
       <h1>Arch3DAR</h1>
-      <p className="muted">Upload an IFC, get a public link to view and place it in AR.</p>
+      <p className="muted">Upload an IFC or SketchUp model, get a public link to view and place it in AR.</p>
 
       {!result && (
         <form onSubmit={onSubmit} className="card">
@@ -95,7 +102,7 @@ export default function HomePage() {
             placeholder="Living Room Sofa"
           />
 
-          <label>IFC file</label>
+          <label>3D model file</label>
           <div
             className={'dropzone' + (dragOver ? ' over' : '')}
             onClick={() => document.getElementById('file-input')?.click()}
@@ -111,12 +118,12 @@ export default function HomePage() {
                 <strong>{file.name}</strong> · {Math.round(file.size / 1024)} KB
               </span>
             ) : (
-              <span>Click or drop an .ifc file here</span>
+              <span>Click or drop an .ifc or .skp file here</span>
             )}
             <input
               id="file-input"
               type="file"
-              accept=".ifc"
+              accept=".ifc,.skp"
               onChange={onPick}
               style={{ display: 'none' }}
             />
@@ -139,7 +146,9 @@ export default function HomePage() {
 
       {result && (
         <div className="card">
-          <div className="success">Ready: <strong>{result.name}</strong></div>
+          <div className="success">
+            Ready: <strong>{result.name}</strong> ({result.sourceFormat.toUpperCase()})
+          </div>
           <p className="muted">Status: {result.status}</p>
 
           <label>Share link</label>

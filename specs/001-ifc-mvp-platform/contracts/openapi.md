@@ -1,23 +1,22 @@
-# OpenAPI / HTTP Contracts: Arch3DAR — Correção MVP
+# OpenAPI / HTTP Contracts: Arch3DAR — IFC/SKP MVP
 
 **Phase**: 1
 **Branch**: `main`
 **Date**: 2026-06-10
 **Plan**: `specs/001-ifc-mvp-platform/plan.md`
 
-> API mínima sem autenticação e sem MinIO. Todos os assets servidos diretamente pelo backend (proxied por nginx em produção). **Nenhum endpoint de asset usa redirect.**
+> API mínima sem autenticação. Upload `.ifc` ou `.skp`. Assets servidos diretamente (sem redirect).
 
 ---
 
 ## Conventions
 
-- **Base URL (dev)**: `http://localhost:5001` (backend direto) ou `https://localhost` (via nginx)
-- **Base URL (prod)**: `${PUBLIC_BASE_URL}` — **deve ser HTTPS** para AR
+- **Base URL (dev)**: `http://localhost:5001` ou `https://localhost` (nginx)
+- **Base URL (prod)**: `${PUBLIC_BASE_URL}` — **HTTPS** para AR
 - **Auth**: nenhuma
-- **Correlation**: header `X-Correlation-Id` (gerado se ausente)
+- **Correlation**: header `X-Correlation-Id`
 - **Errors**: `application/problem+json` (RFC 7807)
 - **JSON casing**: `camelCase`
-- **Asset URLs**: absolutas, same-origin, sem query-string de presign
 
 ### ProblemDetails shape
 
@@ -26,7 +25,7 @@
   "type": "https://arch3dar.com/errors/conversion-failed",
   "title": "Conversion failed",
   "status": 502,
-  "detail": "USDZ generation failed: usd_from_gltf exited 1",
+  "detail": "SKP import failed: Blender exited 1",
   "correlationId": "f0e1d2c3-b4a5-..."
 }
 ```
@@ -35,21 +34,19 @@
 
 ## Endpoints
 
-| Method | Path | Auth | Description |
-|---|---|---|---|
-| POST | `/upload` | none | Upload IFC, converte, retorna link + QR |
-| GET | `/share/{token}` | none | Metadados + URLs dos assets |
-| GET | `/files/{projectId}/model.glb` | none | Stream GLB |
-| GET | `/files/{projectId}/model.usdz` | none | Stream USDZ |
-| GET | `/files/{projectId}/thumbnail.png` | none | Stream thumbnail |
-| GET | `/share/{token}/qr` | none | QR code SVG |
-| GET | `/health` | none | Liveness |
+| Method | Path | Description |
+|---|---|---|
+| POST | `/upload` | Upload IFC or SKP, convert, return link + QR |
+| GET | `/share/{token}` | Metadata + asset URLs |
+| GET | `/files/{projectId}/model.glb` | Stream GLB |
+| GET | `/files/{projectId}/model.usdz` | Stream USDZ |
+| GET | `/files/{projectId}/thumbnail.webp` | Stream thumbnail |
+| GET | `/share/{token}/qr` | QR code SVG |
+| GET | `/health` | Liveness |
 
 ---
 
 ## POST /upload
-
-Upload IFC, executa conversão síncrona (backend → converter HTTP), persiste em `/data`, retorna link público.
 
 **Request**
 
@@ -57,14 +54,18 @@ Upload IFC, executa conversão síncrona (backend → converter HTTP), persiste 
 POST /upload
 Content-Type: multipart/form-data
 
-file=<binary .ifc>
-name=Living Room Sofa   (optional)
+file=<binary .ifc | .skp>
+name=Kitchen Island   (optional)
 ```
 
 **Validation**
-- `file` obrigatório, extensão `.ifc`
-- Primeira linha do conteúdo: `ISO-10303-21`
-- Tamanho ≤ `MAX_IFC_MB` (default 100)
+
+| Format | Extension | Signature |
+|---|---|---|
+| IFC | `.ifc` | First line `ISO-10303-21` |
+| SKP | `.skp` | ZIP magic `PK\x03\x04`; contains SketchUp structure |
+
+- Tamanho ≤ `MAX_UPLOAD_MB` (default 100)
 
 **Responses**
 
@@ -74,99 +75,81 @@ name=Living Room Sofa   (optional)
 {
   "token": "a1b2c3d4e5f6789012345678abcdef01",
   "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-  "name": "Living Room Sofa",
+  "name": "Kitchen Island",
+  "sourceFormat": "skp",
   "status": "Ready",
   "shareUrl": "https://app.example.com/s/a1b2c3d4e5f6789012345678abcdef01",
   "qrSvg": "<svg xmlns=\"http://www.w3.org/2000/svg\" ...></svg>"
 }
 ```
 
-- `400` — campo `file` ausente
-- `413` — arquivo grande demais
-- `415` — não é IFC válido
-- `502` — conversão falhou (GLB ou USDZ)
+- `400` — `file` missing
+- `413` — file too large
+- `415` — invalid format / signature
+- `502` — conversion failed (GLB, USDZ, or thumbnail)
 
 **Notes**
-- Request pode demorar até `CONVERSION_TIMEOUT_S` (default 120s).
-- Cliente deve exibir spinner durante upload+conversão.
+- Timeout: up to `IFC_CONVERSION_TIMEOUT_S` (120s) or `SKP_CONVERSION_TIMEOUT_S` (180s).
+- Client shows spinner during upload+conversion.
 
 ---
 
 ## GET /share/{token}
 
-Retorna dados para o viewer. Token = 32-char hex do `PublicToken`.
-
-**Responses**
-
-- `200 OK` — projeto Ready
+**200 OK — Ready**
 
 ```json
 {
-  "name": "Living Room Sofa",
+  "name": "Kitchen Island",
   "status": "Ready",
-  "glbUrl": "https://app.example.com/files/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/model.glb",
-  "usdzUrl": "https://app.example.com/files/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/model.usdz",
-  "thumbnailUrl": "https://app.example.com/files/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/thumbnail.png"
+  "sourceFormat": "skp",
+  "glbUrl": "https://app.example.com/files/8b7e4f1a-.../model.glb",
+  "usdzUrl": "https://app.example.com/files/8b7e4f1a-.../model.usdz",
+  "thumbnailUrl": "https://app.example.com/files/8b7e4f1a-.../thumbnail.webp"
 }
 ```
 
-- `200 OK` — ainda convertendo
+**200 OK — Converting**
 
 ```json
 {
-  "name": "Living Room Sofa",
+  "name": "Kitchen Island",
   "status": "Converting",
+  "sourceFormat": "skp",
   "glbUrl": null,
   "usdzUrl": null,
   "thumbnailUrl": null
 }
 ```
 
-- `404` — token inválido ou projeto Failed
+- `404` — invalid token or Failed project
 
 ---
 
 ## GET /files/{projectId}/model.glb
 
-Serve o GLB diretamente.
-
-**Responses**
-- `200 OK`
-  - `Content-Type: model/gltf-binary`
-  - `Accept-Ranges: bytes`
-  - Body: binary GLB
-  - **Sem** header `Location`
-- `404` — arquivo ou projeto inexistente
+- `200 OK` — `Content-Type: model/gltf-binary`, `Accept-Ranges: bytes`, no `Location`
+- `404`
 
 ---
 
 ## GET /files/{projectId}/model.usdz
 
-Serve o USDZ diretamente para Quick Look / `ios-src`.
-
-**Responses**
-- `200 OK`
-  - `Content-Type: model/vnd.usdz+zip`
-  - Body: binary USDZ (zip)
-  - **Sem** header `Location`
-- `404` — arquivo ou projeto inexistente
+- `200 OK` — `Content-Type: model/vnd.usdz+zip`, no `Location`
+- `404`
 
 ---
 
-## GET /files/{projectId}/thumbnail.png
+## GET /files/{projectId}/thumbnail.webp
 
-**Responses**
-- `200 OK`, `Content-Type: image/png`
+- `200 OK` — `Content-Type: image/webp`
 - `404`
 
 ---
 
 ## GET /share/{token}/qr
 
-Retorna QR code como SVG apontando para `shareUrl`.
-
-**Responses**
-- `200 OK`, `Content-Type: image/svg+xml`
+- `200 OK` — `Content-Type: image/svg+xml`
 - `404`
 
 ---
@@ -184,8 +167,9 @@ Retorna QR code como SVG apontando para `shareUrl`.
 `POST http://converter:8080/convert`
 
 **Request**: `multipart/form-data`
-- `projectId` (uuid string)
-- `file` (IFC bytes)
+- `projectId` (uuid)
+- `sourceFormat` (`ifc` | `skp`)
+- `file` (original bytes)
 
 **Response** `200`:
 
@@ -193,34 +177,41 @@ Retorna QR code como SVG apontando para `shareUrl`.
 {
   "glbPath": "projects/{id}/model.glb",
   "usdzPath": "projects/{id}/model.usdz",
-  "thumbnailPath": "projects/{id}/thumbnail.png",
-  "durationMs": 45230
+  "thumbnailPath": "projects/{id}/thumbnail.webp",
+  "durationMs": 87230
 }
 ```
 
-**Behavior**
-- Escreve arquivos em `/data/projects/{id}/` (volume compartilhado).
-- Falha `422` se GLB ou USDZ vazios.
-- Não usa MinIO.
+**Pipeline by format**
 
-**Pipeline**
-1. `IfcConvert input.ifc output.glb`
-2. `IfcConvert input.ifc thumb.png --thumbnail` (fallback: placeholder PNG)
-3. `usd_from_gltf output.glb output.usdz`
+IFC:
+1. Write `original.ifc`
+2. `IfcConvert` → `model.glb`
+3. `glb_normalize`
+4. `usd_from_gltf` → `model.usdz`
+5. `render_thumbnail.py` → `thumbnail.webp`
+
+SKP:
+1. Write `original.skp`
+2. `blender -b --python skp_to_glb.py` → `model.glb`
+3. `glb_normalize`
+4. `usd_from_gltf` → `model.usdz`
+5. `render_thumbnail.py` → `thumbnail.webp`
+
+**Errors**
+- `422` — empty GLB/USDZ/WebP
+- `504` — timeout
 
 ---
 
-## nginx proxy rules (production)
+## nginx proxy rules
 
 ```nginx
-# API
-location /upload { proxy_pass http://backend:5000/upload; proxy_redirect off; }
-location /share/ { proxy_pass http://backend:5000/share/; proxy_redirect off; }
-location /files/ { proxy_pass http://backend:5000/files/; proxy_redirect off; }
-location /health { proxy_pass http://backend:5000/health; proxy_redirect off; }
-
-# SPA
-location / { try_files $uri $uri/ /index.html; }
+location /upload  { proxy_pass http://backend:5000/upload;  proxy_redirect off; }
+location /share/  { proxy_pass http://backend:5000/share/;  proxy_redirect off; }
+location /files/  { proxy_pass http://backend:5000/files/;  proxy_redirect off; }
+location /health  { proxy_pass http://backend:5000/health;  proxy_redirect off; }
+location /        { try_files $uri $uri/ /index.html; }
 ```
 
-TLS termination no nginx. Certificado válido obrigatório para testes AR em dispositivos reais.
+TLS termination at nginx. Valid certificate required for device AR testing.

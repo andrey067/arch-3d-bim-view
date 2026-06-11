@@ -1,169 +1,201 @@
-# Tasks: Arch3DAR — Correção MVP IFC → AR (Android + iPhone)
+# Tasks: Arch3DAR — IFC/SKP → Web 3D + AR MVP
 
 **Input**: Design documents from `specs/001-ifc-mvp-platform/`
 
-**Prerequisites**: plan.md, spec.md (correction scope in plan.md supersedes auth/MinIO portions), research.md, data-model.md, contracts/openapi.md, quickstart.md
+**Prerequisites**: plan.md, spec.md (clarifications 2026-06-10), research.md (R-11…R-20), data-model.md, contracts/openapi.md, quickstart.md
 
-**Tests**: Included — plan and acceptance criteria explicitly require automated tests for upload, GLB/USDZ conversion, and file download.
+**Tests**: Included — SC-007 and quickstart §8 require automated E2E coverage for upload, conversion, and file serving.
 
-**Organization**: Tasks grouped by correction user story (US1–US4). Auth, dashboard, and MinIO are out of scope.
+**Organization**: Phases 1–6 delivered IFC correction (complete). Phases 7–9 extend US1 with SKP + WebP thumbnail. US2/US3 updated where asset URLs change.
 
 ## Format: `[ID] [P?] [Story] Description`
 
 - **[P]**: Can run in parallel (different files, no dependencies on incomplete tasks)
-- **[Story]**: Maps to correction user story (US1–US4)
+- **[Story]**: Maps to spec user story (US1, US2, US3)
 - Every task includes an exact file path
 
-## User Story Mapping (Correction Scope)
+## User Story Mapping
 
 | Story | Priority | Goal | Independent Test |
 |---|---|---|---|
-| **US1** | P1 | Upload IFC → conversão GLB + USDZ → persistência em `/data` | `POST /upload` retorna `Ready`; arquivos existem em `/data/projects/{id}/` |
-| **US2** | P1 | Servir GLB/USDZ/thumbnail diretamente + Share API + QR | `GET /files/...` retorna 200, MIME correto, sem `Location` header |
-| **US3** | P1 | Visualização Web 3D no link público | Abrir `/s/{token}` — thumbnail + GLB renderizam com orbit/zoom |
-| **US4** | P1 | AR Android (Scene Viewer) + iPhone (Quick Look) | Tap AR em Android e iPhone sem "Object could not be opened" |
+| **US1** | P1 | Upload `.ifc` or `.skp` → GLB + USDZ + thumbnail → public link + QR | `POST /upload` → `Ready`; `/data/projects/{id}/` has all artifacts |
+| **US2** | P1 | Client opens `/s/{token}` — WebP poster + interactive 3D viewer | Incognito browser: orbit/zoom/fullscreen work |
+| **US3** | P1 | AR on Android (Scene Viewer) + iPhone (Quick Look via USDZ) | Tap AR on mobile over HTTPS — no Quick Look error |
 
 ---
 
-## Phase 1: Setup (Shared Infrastructure)
+## Phase 1: Setup — Local Storage (Complete ✅)
 
-**Purpose**: Remover MinIO do stack e preparar volume local compartilhado
+**Purpose**: Remove MinIO; shared `/data` volume
 
-- [x] T001 Remove `minio` service, `minio_data` volume, and MinIO env vars from `app/docker-compose.yml`; add `project_data` volume mounted at `/data` on `backend` and `converter`
-- [x] T002 [P] Replace MinIO variables with `DATA_ROOT=/data` and document `PUBLIC_BASE_URL` (HTTPS) in `app/.env.example`
-- [x] T003 [P] Remove `Minio` NuGet package reference from `app/backend/Backend.csproj`
-- [x] T004 [P] Remove `minio` dependency from `app/converter/requirements.txt`; drop trimesh/pxr if replaced by `usd_from_gltf`
-- [x] T005 [P] Update `app/README.md` to document local storage layout `/data/projects/{id}/` and removal of MinIO
-- [x] T006 [P] Add `build-converter` and `verify-no-minio` targets to `Makefile` if useful for CI smoke checks
-
----
-
-## Phase 2: Foundational (Blocking Prerequisites)
-
-**Purpose**: Infraestrutura core que bloqueia todas as user stories
-
-**⚠️ CRITICAL**: Nenhuma user story começa antes desta fase
-
-- [x] T007 Create `app/backend/Infrastructure/LocalFileStorage.cs` with `EnsureProjectDir`, `WriteFile`, `ResolvePath`, `FileExists` under `{DATA_ROOT}/projects/{id}/`
-- [x] T008 [P] Create `app/backend/Infrastructure/ModelContentTypeMiddleware.cs` mapping `.glb` → `model/gltf-binary`, `.usdz` → `model/vnd.usdz+zip`, `.png` → `image/png`
-- [x] T009 Update `app/backend/Domain/Project.cs` and `app/backend/Domain/ProjectStatus.cs` per `data-model.md` (DataDirectory, file names, no MinIO keys)
-- [x] T010 Update `app/backend/Infrastructure/AppDbContext.cs` entity configuration for simplified `projects` table
-- [x] T011 Update `app/backend/Migrations/20260610000000_Initial.cs` to match simplified schema (drop `share_links`/Identity if present)
-- [x] T012 Create `app/converter/usd_converter.py` wrapping `usd_from_gltf` CLI with timeout and error handling
-- [x] T013 Update `app/converter/Dockerfile` to install/bake `usd_from_gltf` binary (e.g. from `marlon360/usd-from-gltf` stage) on Linux
-- [x] T014 Refactor `app/converter/converter_service.py` to write `original.ifc`, `model.glb`, `model.usdz`, `thumbnail.png` to `/data/projects/{id}/` and remove all MinIO code
-- [x] T015 Delete `app/backend/Infrastructure/MinioService.cs` and remove all references
-- [x] T016 Update `app/backend/Infrastructure/HttpModelConverter.cs` to call converter sidecar and return local relative paths (not MinIO keys)
-
-**Checkpoint**: Foundation ready — converter writes to `/data`, backend can read paths, MinIO removed from code
+- [x] T001 Remove `minio` service and add `project_data:/data` volume in `app/docker-compose.yml`
+- [x] T002 [P] Replace MinIO env with `DATA_ROOT=/data`, `PUBLIC_BASE_URL` in `app/.env.example`
+- [x] T003 [P] Remove `Minio` package from `app/backend/Backend.csproj`
+- [x] T004 [P] Remove MinIO/trimesh deps from `app/converter/requirements.txt`
+- [x] T005 [P] Document local storage in `app/README.md`
+- [x] T006 [P] Add Makefile targets for converter build / MinIO audit
 
 ---
 
-## Phase 3: User Story 1 — Upload + Conversão GLB/USDZ (Priority: P1) 🎯 MVP
+## Phase 2: Foundational — Core Infrastructure (Complete ✅)
 
-**Goal**: `POST /upload` aceita IFC, executa pipeline IfcConvert → GLB → `usd_from_gltf` → USDZ, persiste em disco local
+**Purpose**: LocalFileStorage, USDZ pipeline, simplified schema
 
-**Independent Test**: `curl -F file=@sample.ifc http://localhost:5001/upload` → `status: Ready`; `ls /data/projects/{id}/` mostra os 4 arquivos
+- [x] T007 Create `app/backend/Infrastructure/LocalFileStorage.cs`
+- [x] T008 [P] Create `app/backend/Infrastructure/ModelContentTypeMiddleware.cs`
+- [x] T009 Update `app/backend/Domain/Project.cs` and `ProjectStatus.cs` per data-model
+- [x] T010 Update `app/backend/Infrastructure/AppDbContext.cs`
+- [x] T011 Update `app/backend/Migrations/20260610000000_Initial.cs`
+- [x] T012 Create `app/converter/usd_converter.py`
+- [x] T013 Update `app/converter/Dockerfile` with `usd_from_gltf`
+- [x] T014 Refactor `app/converter/converter_service.py` for local disk output
+- [x] T015 Delete `app/backend/Infrastructure/MinioService.cs`
+- [x] T016 Update `app/backend/Infrastructure/HttpModelConverter.cs`
+- [x] T016a Create `app/converter/glb_normalize.py` and integrate in `app/converter/converter_service.py`
 
-### Tests for User Story 1
-
-- [x] T017 [P] [US1] Create `app/tests/backend/Integration/UploadConversionTests.cs` — POST `/upload` with `app/tests/backend/Integration/Fixtures/sample.ifc`, assert `Ready`, assert files on disk
-- [x] T018 [P] [US1] Add converter smoke test in `app/converter/test_usd_converter.py` — GLB fixture → non-empty valid USDZ zip
-
-### Implementation for User Story 1
-
-- [x] T019 [US1] Refactor `POST /upload` in `app/backend/Program.cs` to save IFC via `LocalFileStorage` instead of MinIO
-- [x] T020 [US1] Wire synchronous `HttpModelConverter.ConvertAsync` in `app/backend/Program.cs` after IFC persist; update project status `Converting` → `Ready`/`Failed`
-- [x] T021 [US1] Enforce mandatory USDZ in `app/backend/Program.cs` — call `MarkFailed` if `model.usdz` missing or zero bytes (no GLB-only fallback)
-- [x] T022 [US1] Update `app/backend/Dockerfile` to set `DATA_ROOT=/data`, mount-compatible with converter volume
-- [x] T023 [P] [US1] Update `app/converter/converter_service.py` response contract to return `{ glbPath, usdzPath, thumbnailPath, durationMs }` per `contracts/openapi.md`
-
-**Checkpoint**: Upload end-to-end works; GLB + USDZ gerados localmente
+**Checkpoint**: IFC pipeline writes GLB/USDZ/thumbnail to `/data/projects/{id}/`
 
 ---
 
-## Phase 4: User Story 2 — Entrega Direta de Arquivos + Share + QR (Priority: P1)
+## Phase 3: User Story 1 — Upload + Conversion IFC (Complete ✅)
 
-**Goal**: Assets servidos via `GET /files/{projectId}/...` sem redirect; Share API retorna URLs same-origin absolutas
+**Goal**: `POST /upload` accepts IFC → IfcConvert → normalize → USDZ
 
-**Independent Test**: `curl -sI /files/{id}/model.usdz` → `200`, `Content-Type: model/vnd.usdz+zip`, sem header `Location`
+**Independent Test**: `curl -F file=@sample.ifc /upload` → `Ready`; files on disk
 
-### Tests for User Story 2
+- [x] T017 [P] [US1] Create `app/tests/backend/Integration/UploadConversionTests.cs`
+- [x] T018 [P] [US1] Create `app/converter/test_usd_converter.py`
+- [x] T019 [US1] Refactor `POST /upload` in `app/backend/Program.cs` for `LocalFileStorage`
+- [x] T020 [US1] Wire `HttpModelConverter.ConvertAsync` with status transitions in `app/backend/Program.cs`
+- [x] T021 [US1] Enforce mandatory USDZ — `MarkFailed` if missing in `app/backend/Program.cs`
+- [x] T022 [US1] Update `app/backend/Dockerfile` with `DATA_ROOT=/data`
+- [x] T023 [P] [US1] Align converter response contract in `app/converter/converter_service.py`
 
-- [x] T024 [P] [US2] Create `app/tests/backend/Integration/FileServingTests.cs` — assert GLB/USDZ Content-Type, `Accept-Ranges` on GLB, no `Location` header, 404 for unknown id
+---
 
-### Implementation for User Story 2
+## Phase 4: User Story 2 — File Serving + Share API (Complete ✅ — WebP update in Phase 8)
 
-- [x] T025 [US2] Implement `GET /files/{projectId}/model.glb` in `app/backend/Program.cs` using `Results.File()` + `LocalFileStorage.ResolvePath`
-- [x] T026 [P] [US2] Implement `GET /files/{projectId}/model.usdz` in `app/backend/Program.cs` with `model/vnd.usdz+zip`
+**Goal**: Direct `GET /files/...` without redirect; share JSON with asset URLs
+
+**Independent Test**: `curl -sI /files/{id}/model.usdz` → 200, correct MIME, no `Location`
+
+- [x] T024 [P] [US2] Create `app/tests/backend/Integration/FileServingTests.cs`
+- [x] T025 [US2] Implement `GET /files/{projectId}/model.glb` in `app/backend/Program.cs`
+- [x] T026 [P] [US2] Implement `GET /files/{projectId}/model.usdz` in `app/backend/Program.cs`
 - [x] T027 [P] [US2] Implement `GET /files/{projectId}/thumbnail.png` in `app/backend/Program.cs`
-- [x] T028 [US2] Update `GET /share/{token}` in `app/backend/Program.cs` to return absolute same-origin URLs (`{PUBLIC_BASE_URL}/files/{id}/model.glb`) — no presigned MinIO URLs
-- [x] T029 [US2] Register `ModelContentTypeMiddleware` in `app/backend/Program.cs` before file-serving routes
-- [x] T030 [US2] Remove MinIO upstream and `/glb-files/`, `/thumbnails/` locations from `app/nginx/nginx.conf`; add `location /files/` → `proxy_pass http://backend/files/` with `proxy_redirect off`
-- [x] T031 [P] [US2] Ensure `GET /share/{token}/qr` in `app/backend/Program.cs` returns SVG QR pointing to `{PUBLIC_BASE_URL}/s/{token}`
-
-**Checkpoint**: curl downloads GLB/USDZ directly; share JSON has no minio hostnames
+- [x] T028 [US2] Update `GET /share/{token}` with same-origin URLs in `app/backend/Program.cs`
+- [x] T029 [US2] Register `ModelContentTypeMiddleware` in `app/backend/Program.cs`
+- [x] T030 [US2] Update `app/nginx/nginx.conf` — `/files/` proxy, no redirect
+- [x] T031 [P] [US2] Implement `GET /share/{token}/qr` in `app/backend/Program.cs`
 
 ---
 
-## Phase 5: User Story 3 — Visualização Web 3D (Priority: P1)
+## Phase 5: User Story 2 — Web Viewer (Complete ✅)
 
-**Goal**: Cliente abre `/s/{token}` e vê thumbnail + modelo 3D interativo (orbit, zoom, pan)
+**Goal**: `/s/{token}` renders thumbnail poster + `<model-viewer>`
 
-**Independent Test**: Abrir link público no browser — `<model-viewer>` carrega GLB, poster mostra thumbnail, controles funcionam
+**Independent Test**: Public link loads GLB with orbit/zoom in browser
 
-### Tests for User Story 3
-
-- [x] T032 [P] [US3] Update `app/frontend/src/__tests__/SharePage.test.tsx` — mock share API, assert `<model-viewer>` renders with `src` and `poster`
-- [x] T033 [P] [US3] Skipped — `adminBoundary.test.ts` not present; routes already limited to HomePage + SharePage
-
-### Implementation for User Story 3
-
-- [x] T034 [US3] Update `app/frontend/src/pages/HomePage.tsx` (upload) to `POST /upload` and navigate to `/s/{token}` on success
-- [x] T035 [US3] Simplify `app/frontend/src/App.tsx` routes to `/` (HomePage/upload) and `/s/:token` (SharePage) only; remove dashboard/login routes
-- [x] T036 [P] [US3] Delete or stub unused pages: `app/frontend/src/pages/DashboardPage.tsx`, `app/frontend/src/pages/ProjectDetailPage.tsx`, `app/frontend/src/pages/UploadPage.tsx` if superseded by HomePage
-- [x] T037 [US3] Update `app/frontend/vite.config.ts` dev proxy for `/upload`, `/share/`, `/files/` → backend
-- [x] T038 [US3] Verify `app/frontend/src/pages/SharePage.tsx` uses share API `glbUrl`/`thumbnailUrl` and shows loading/not-found states
-
-**Checkpoint**: Web viewer works desktop and mobile browser without AR
+- [x] T032 [P] [US2] Update `app/frontend/src/__tests__/SharePage.test.tsx`
+- [x] T034 [US2] Update `app/frontend/src/pages/HomePage.tsx` for upload flow
+- [x] T035 [US2] Simplify routes in `app/frontend/src/App.tsx`
+- [x] T036 [P] [US2] Remove unused dashboard pages from `app/frontend/src/pages/`
+- [x] T037 [US2] Update dev proxy in `app/frontend/vite.config.ts`
+- [x] T038 [US2] Verify loading/error states in `app/frontend/src/pages/SharePage.tsx`
 
 ---
 
-## Phase 6: User Story 4 — AR Android + iPhone Quick Look (Priority: P1)
+## Phase 6: User Story 3 — AR Android + iPhone (Complete ✅)
 
-**Goal**: AR funciona em Android (Scene Viewer) e iPhone (Quick Look) via `ios-src` + USDZ válido + HTTPS
+**Goal**: Scene Viewer + Quick Look via `ios-src` + valid USDZ
 
-**Independent Test**: Manual checklist quickstart §6 — iPhone Quick Look abre sem "Object could not be opened"
+**Independent Test**: AR opens on Android Chrome and iOS Safari over HTTPS
 
-### Tests for User Story 4
-
-- [x] T039 [P] [US4] Create `app/frontend/src/__tests__/ModelViewerAr.test.tsx` — assert `ios-src` attribute set when `usdzUrl` provided; `ar-modes` includes `quick-look` first
-
-### Implementation for User Story 4
-
-- [x] T040 [US4] Update `app/frontend/src/pages/SharePage.tsx` — `ios-src={usdzUrl}`, `ar-modes="quick-look scene-viewer webxr"`, `auto-rotate`, `camera-controls`, `shadow-intensity="1"`, `exposure="1"`
-- [x] T041 [US4] Hide or disable AR affordance in `app/frontend/src/pages/SharePage.tsx` when `usdzUrl` is null; keep 3D viewer as fallback
-- [x] T042 [US4] Show HTTPS-required banner in `app/frontend/src/pages/SharePage.tsx` when `window.location.protocol !== 'https:'`
-- [x] T043 [US4] Configure `PUBLIC_BASE_URL` as HTTPS in `app/docker-compose.yml` and `app/.env.example` for production AR testing
-- [x] T044 [US4] Add `types` for `model.usdz` and `model/gltf-binary` in `app/nginx/nginx.conf` `mime.types` include or explicit `types` block if needed
-- [x] T045 [P] [US4] Remove dead AR code from `app/frontend/src/components/ModelViewer.tsx` if SharePage is the sole viewer; ensure no admin imports
-
-**Checkpoint**: AR manual test passes on Android Chrome and iOS Safari over HTTPS
+- [x] T039 [P] [US3] Create `app/frontend/src/__tests__/ModelViewerAr.test.tsx`
+- [x] T040 [US3] Configure AR attrs in `app/frontend/src/pages/SharePage.tsx`
+- [x] T041 [US3] Hide AR when `usdzUrl` null in `app/frontend/src/pages/SharePage.tsx`
+- [x] T042 [US3] HTTPS banner in `app/frontend/src/pages/SharePage.tsx`
+- [x] T043 [US3] Configure `PUBLIC_BASE_URL` HTTPS in `app/docker-compose.yml`
+- [x] T044 [US3] MIME types for GLB/USDZ in `app/nginx/nginx.conf`
+- [x] T045 [P] [US3] Clean up `app/frontend/src/components/ModelViewer.tsx` if unused
 
 ---
 
-## Phase 7: Polish & Cross-Cutting Concerns
+## Phase 7: User Story 1 — SKP Support (SpecDrive Phase B) ✅
 
-**Purpose**: Cleanup, validação final, zero MinIO
+**Goal**: Upload `.skp` → Blender headless SKP→GLB → common pipeline → link público
 
-- [x] T046 [P] Remove `app/frontend/src/auth/useCurrentUser.ts`, `app/frontend/src/api/client.ts` auth helpers, and unused components (`ShareDialog.tsx`, `StatusBadge.tsx`) if no longer referenced
-- [x] T047 [P] Update `app/tests/backend/Unit/ProjectStateTransitionTests.cs` for `Uploading`/`Converting`/`Ready`/`Failed` states
-- [x] T048 Run `make test-backend` and fix failures in `app/tests/backend/` (net10.0; 10/10 passing)
-- [x] T049 [P] Run `make test-frontend` and fix failures in `app/frontend/src/__tests__/`
-- [ ] T050 Run quickstart validation scenarios §0–§4 from `specs/001-ifc-mvp-platform/quickstart.md` (boot, upload, disk check, curl MIME)
-- [x] T051 [P] Grep entire `app/` for `minio`, `MinIO`, `presign`, `S3` — remove or document any remaining references
-- [x] T052 Run `make audit-bim` to confirm FR-031/SC-008 compliance in user-facing surfaces
-- [ ] T053 Complete manual AR checklist in `specs/001-ifc-mvp-platform/quickstart.md` §6 on real Android + iPhone devices
+**Independent Test**: `curl -F file=@sample.skp /upload` → `Ready`, `sourceFormat: "skp"`, SKP materials visible in viewer
+
+### Implementation
+
+- [x] T054 [P] Add Blender 4.2 LTS and headless deps (`libgl1`, `libxi6`) to `app/converter/Dockerfile`
+- [x] T055 [P] Create `app/converter/skp_to_glb.py` — Blender batch: import SKP, export glTF binary
+- [x] T056 [P] Extract IFC steps into `app/converter/ifc_pipeline.py` from `app/converter/converter_service.py`
+- [x] T057 [US1] Update `app/converter/converter_service.py` — accept `sourceFormat` form field; dispatch IFC vs SKP pipeline
+- [x] T058 [US1] Add `SourceFormat` enum in `app/backend/Domain/SourceFormat.cs` and column on `Project` in `app/backend/Domain/Project.cs`
+- [x] T059 [US1] Add migration `app/backend/Migrations/20260610130000_AddSourceFormat.cs` — `SourceFormat` column
+- [x] T060 [US1] Update `POST /upload` in `app/backend/Program.cs` — accept `.skp`, validate ZIP/SketchUp signature, set `SourceFormat`
+- [x] T061 [US1] Update `app/backend/Infrastructure/HttpModelConverter.cs` — pass `sourceFormat` to converter sidecar
+- [x] T062 [P] [US1] Update `app/frontend/src/pages/HomePage.tsx` — `accept=".ifc,.skp"`, show `sourceFormat` on success
+- [x] T063 [P] [US1] Add `SKP_CONVERSION_TIMEOUT_S` and `MAX_UPLOAD_MB` in `app/.env.example`
+
+### Tests
+
+- [x] T064 [P] [US1] Add minimal SKP fixture generation in `app/tests/backend/Integration/SkpUploadConversionTests.cs`
+- [x] T065 [US1] Create `app/tests/backend/Integration/SkpUploadConversionTests.cs` — SKP upload → Ready, `original.skp` + GLB/USDZ on disk
+- [x] T066 [P] [US1] Create `app/converter/test_skp_to_glb.py` — smoke test SKP fixture → non-empty GLB
+
+**Checkpoint**: Both IFC and SKP upload paths produce shareable links
+
+---
+
+## Phase 8: Thumbnail WebP Migration (SpecDrive Phase C) ✅
+
+**Goal**: Replace `thumbnail.png` with `thumbnail.webp` via Blender render (both formats)
+
+**Independent Test**: `curl -sI /files/{id}/thumbnail.webp` → 200, `image/webp`
+
+### Implementation
+
+- [x] T067 [P] Create `app/converter/render_thumbnail.py` — Blender headless: import GLB, render → WebP 512px
+- [x] T068 [US1] Update `app/converter/converter_service.py` — call `render_thumbnail.py` after GLB normalize (IFC + SKP paths)
+- [x] T069 [P] [US2] Add `.webp` → `image/webp` in `app/backend/Infrastructure/ModelContentTypeMiddleware.cs`
+- [x] T070 [US2] Replace `GET /files/{projectId}/thumbnail.png` with `thumbnail.webp` in `app/backend/Program.cs`
+- [x] T071 [US2] Update `GET /share/{token}` thumbnail URL to `.webp` in `app/backend/Program.cs`
+- [x] T072 [P] [US2] Update `app/frontend/src/pages/SharePage.tsx` poster to use WebP `thumbnailUrl`
+- [x] T073 [P] Update default `ThumbnailFileName` to `thumbnail.webp` in `app/backend/Domain/Project.cs`
+
+### Tests
+
+- [x] T074 [P] [US2] Update `app/tests/backend/Integration/FileServingTests.cs` — assert `image/webp` Content-Type
+- [x] T075 [P] [US1] Update `app/tests/backend/Integration/UploadConversionTests.cs` — assert `thumbnail.webp` exists on disk
+- [x] T076 [P] Create `app/converter/test_render_thumbnail.py` — GLB fixture → non-empty WebP
+
+**Checkpoint**: All new uploads produce WebP thumbnails; PNG route removed
+
+---
+
+## Phase 9: Service Abstractions + Polish
+
+**Purpose**: FR-010 interfaces, docs, full quickstart validation
+
+### Service interfaces (FR-010)
+
+- [x] T077 [P] Create `app/backend/Services/IModelConversionService.cs` — abstract conversion contract
+- [x] T078 [P] Create `app/backend/Services/IFileStorageService.cs` wrapping `LocalFileStorage` operations
+- [x] T079 Register `IModelConversionService` → `HttpModelConverter` adapter in `app/backend/Program.cs`
+
+### Cross-cutting
+
+- [x] T080 [P] Update `app/README.md` — SKP support, Blender in converter, WebP thumbnail, env vars
+- [x] T081 [P] Update `app/converter/converter_service.py` OpenAPI docstring to match `specs/001-ifc-mvp-platform/contracts/openapi.md`
+- [x] T082 Run `dotnet test app/tests/backend/Integration/` — all IFC + SKP + file serving tests pass
+- [x] T083 [P] Run `cd app/frontend && npm test` — SharePage + ModelViewerAr tests pass
+- [x] T084 [P] Run `cd app/converter && python -m pytest test_*.py -v`
+- [ ] T085 Run quickstart automated scenarios §0–§4 from `specs/001-ifc-mvp-platform/quickstart.md`
+- [ ] T086 Complete manual AR checklist §7 (IFC + SKP) on Android + iPhone over HTTPS
+- [x] T087 [P] Grep `app/` for `thumbnail.png` — remove stale references
 
 ---
 
@@ -172,79 +204,89 @@
 ### Phase Dependencies
 
 ```text
-Phase 1 (Setup)
+Phases 1–6 (IFC correction) ✅ COMPLETE
     ↓
-Phase 2 (Foundational) — BLOCKS all stories
+Phase 7 (SKP) — requires T054 Blender in Dockerfile before T055–T057
     ↓
-Phase 3 (US1: Upload+Convert) — required before US2 file serving has data
+Phase 8 (WebP) — can start T067 in parallel with Phase 7 converter work; T068 integrates after T057
     ↓
-Phase 4 (US2: File serving) — required before US3/US4 can load assets
-    ↓
-Phase 5 (US3: Web viewer) ─┐
-    ↓                      ├→ can overlap once US2 complete
-Phase 6 (US4: AR) ─────────┘
-    ↓
-Phase 7 (Polish)
+Phase 9 (Polish) — after Phases 7 + 8
 ```
 
 ### User Story Dependencies
 
-- **US1** → **US2**: files must exist before serving endpoints matter
-- **US2** → **US3/US4**: viewer and AR need same-origin `/files/` URLs
-- **US3** and **US4** can proceed in parallel after US2 (different files: SharePage web vs AR attrs)
+- **US1 (SKP)**: Phase 7 extends upload; independent of US2/US3 frontend except HomePage accept attr
+- **US2 (WebP)**: Phase 8 updates poster URL — US3 AR unchanged (USDZ path same)
+- **US3**: Already complete; re-validate after SKP uploads in Phase 9 §7
 
 ### Parallel Opportunities
 
-**Phase 1** (all [P]): T002, T003, T004, T005, T006 in parallel after T001
+**Phase 7** (after T054):
+```bash
+# Parallel:
+T055 skp_to_glb.py
+T056 ifc_pipeline.py
+T064 sample.skp fixture
 
-**Phase 2**: T008 parallel with T007; T012/T013 parallel with backend tasks after T007
+# Then sequential:
+T057 converter_service.py router
+T058–T061 backend + migration
+T065–T066 tests
+```
 
-**Phase 3**: T017, T018 parallel; T023 parallel with T019–T022
-
-**Phase 4**: T024 parallel with prep; T026, T027, T031 parallel after T025
-
-**Phase 5–6**: Frontend test tasks [P]; US3 and US4 frontend edits are mostly sequential on `SharePage.tsx` — coordinate to avoid conflicts
+**Phase 8** (after T067):
+```bash
+# Parallel:
+T069 ModelContentTypeMiddleware.cs
+T072 SharePage.tsx
+T074–T076 tests
+```
 
 ---
 
-## Parallel Example: User Story 2
+## Parallel Example: Phase 7 SKP
 
 ```bash
-# After T025 lands, launch in parallel:
-Task T026: "Implement GET /files/{projectId}/model.usdz in app/backend/Program.cs"
-Task T027: "Implement GET /files/{projectId}/thumbnail.png in app/backend/Program.cs"
-Task T031: "Ensure GET /share/{token}/qr in app/backend/Program.cs"
+# After T054 (Blender in Dockerfile), launch together:
+Task T055: "Create app/converter/skp_to_glb.py"
+Task T056: "Extract app/converter/ifc_pipeline.py"
+Task T064: "Add app/tests/backend/Integration/Fixtures/sample.skp"
 ```
 
 ---
 
 ## Implementation Strategy
 
-### MVP First (US1 + US2)
+### Current state
 
-1. Complete Phase 1 + Phase 2
-2. Complete Phase 3 (US1) — upload produces GLB + USDZ on disk
-3. Complete Phase 4 (US2) — files downloadable with correct MIME
-4. **STOP and VALIDATE**: quickstart §1–§4 via curl
+Phases 1–6 complete — IFC upload, local storage, direct file serving, web viewer, AR attrs all working with `thumbnail.png`.
 
-### Incremental Delivery
+### Next MVP increment (Phase 7 only)
 
-1. US1 + US2 → backend pipeline complete (no UI needed for curl validation)
-2. Add US3 → web viewer demo
-3. Add US4 → AR on real devices over HTTPS
-4. Phase 7 → production-ready cleanup
+1. T054–T057: Blender + SKP pipeline in converter
+2. T058–T061: Backend + frontend accept SKP
+3. T064–T066: SKP integration tests
+4. **Validate**: quickstart §2 SKP upload
 
-### Suggested MVP Scope
+### Full SpecDrive MVP (Phases 7 + 8 + 9)
 
-Minimum shippable correction: **Phase 1 + 2 + 3 + 4** (backend complete). Frontend (US3 + US4) required for acceptance criteria 5–6 (AR on devices).
+1. Phase 7 → SKP works end-to-end
+2. Phase 8 → WebP thumbnails
+3. Phase 9 → interfaces, docs, full quickstart + manual AR for both formats
+
+### Suggested scope for next PR
+
+**Phase 7 tasks T054–T066** — SKP upload without waiting for WebP migration (PNG thumbnail acceptable as interim).
 
 ---
 
 ## Notes
 
-- Total tasks: **53**
-- Per story: Setup 6, Foundational 10, US1 7, US2 8, US3 7, US4 7, Polish 8
-- USDZ failure must fail the whole upload (no silent GLB-only fallback)
-- Never use 302/307/308 for `/files/` routes
-- `PUBLIC_BASE_URL` must be HTTPS for real-device AR tests
-- Commit after each phase checkpoint
+- **Total tasks**: 87 (85 complete + 2 remaining: T085 quickstart E2E, T086 manual AR)
+- **Remaining by phase**: Polish 2 (manual validation)
+- **Per story (remaining)**: US1 +12, US2 +8, US3 +0 (re-test only)
+- USDZ failure must fail entire upload (no GLB-only fallback)
+- Never use 3xx redirects on `/files/` routes
+- `PUBLIC_BASE_URL` must be HTTPS for device AR tests
+- SKP timeout default 180s (`SKP_CONVERSION_TIMEOUT_S`); IFC 120s
+- Blender SKP import on Linux must be validated with real fixture in T066

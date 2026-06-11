@@ -7,6 +7,7 @@ public sealed class ModelContentTypeMiddleware
         [".glb"] = "model/gltf-binary",
         [".usdz"] = "model/vnd.usdz+zip",
         [".png"] = "image/png",
+        [".webp"] = "image/webp",
     };
 
     private readonly RequestDelegate _next;

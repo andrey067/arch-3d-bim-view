@@ -1,6 +1,8 @@
+using System.IO.Compression;
 using System.Text;
 using Arch3DAr.Backend.Domain;
 using Arch3DAr.Backend.Infrastructure;
+using Arch3DAr.Backend.Services;
 using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
@@ -27,17 +29,20 @@ var converterSettings = new ConverterSettings
 };
 
 var publicBaseUrl = (builder.Configuration["PublicBaseUrl"] ?? "https://localhost").TrimEnd('/');
-var maxIfcMb = int.TryParse(builder.Configuration["MaxIfcMb"], out var mb) ? mb : 100;
-var maxIfcBytes = (long)maxIfcMb * 1024L * 1024L;
+var maxUploadMb = int.TryParse(builder.Configuration["MaxUploadMb"], out var uploadMb) ? uploadMb
+    : int.TryParse(builder.Configuration["MaxIfcMb"], out var legacyMb) ? legacyMb : 100;
+var maxUploadBytes = (long)maxUploadMb * 1024L * 1024L;
 var allowedOrigins = (builder.Configuration["Cors:AllowedOrigins"] ?? "https://localhost")
     .Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
 builder.Services.AddSingleton(storageSettings);
 builder.Services.AddSingleton(converterSettings);
 builder.Services.AddSingleton<LocalFileStorage>();
+builder.Services.AddSingleton<IFileStorageService, LocalFileStorageAdapter>();
 builder.Services.AddSingleton<QrCodeService>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddHttpClient<HttpModelConverter>();
+builder.Services.AddSingleton<IModelConversionService, HttpModelConverterAdapter>();
 
 if (builder.Environment.IsEnvironment("Testing"))
 {
@@ -58,7 +63,7 @@ builder.Services.AddCors(o => o.AddDefaultPolicy(p =>
 
 builder.Services.Configure<FormOptions>(o =>
 {
-    o.MultipartBodyLengthLimit = maxIfcBytes + 1_048_576;
+    o.MultipartBodyLengthLimit = maxUploadBytes + 1_048_576;
 });
 
 builder.Services.ConfigureHttpJsonOptions(o =>
@@ -69,7 +74,7 @@ builder.Services.ConfigureHttpJsonOptions(o =>
 
 builder.WebHost.ConfigureKestrel(o =>
 {
-    o.Limits.MaxRequestBodySize = maxIfcBytes + 1_048_576;
+    o.Limits.MaxRequestBodySize = maxUploadBytes + 1_048_576;
 });
 
 var app = builder.Build();
@@ -124,7 +129,7 @@ string NewToken()
 string FileUrl(Guid projectId, string fileName) =>
     $"{publicBaseUrl}/files/{projectId}/{fileName}";
 
-IResult ServeProjectFile(Guid projectId, string fileName, LocalFileStorage storage)
+IResult ServeProjectFile(Guid projectId, string fileName, IFileStorageService storage)
 {
     var path = storage.ResolvePath(projectId, fileName);
     if (!storage.IsInsideDataRoot(path) || !File.Exists(path))
@@ -136,7 +141,7 @@ IResult ServeProjectFile(Guid projectId, string fileName, LocalFileStorage stora
     {
         LocalFileStorage.GlbFileName => "model/gltf-binary",
         LocalFileStorage.UsdzFileName => "model/vnd.usdz+zip",
-        LocalFileStorage.ThumbnailFileName => "image/png",
+        LocalFileStorage.ThumbnailFileName => "image/webp",
         _ => "application/octet-stream",
     };
 
@@ -150,15 +155,15 @@ app.MapGet("/health", () => Results.Ok(new { status = "ok" }));
 app.MapPost("/upload", async (
     HttpContext http,
     AppDbContext db,
-    LocalFileStorage storage,
-    HttpModelConverter converter,
+    IFileStorageService storage,
+    IModelConversionService converter,
     QrCodeService qr,
     ILogger<Program> logger,
     CancellationToken ct) =>
 {
     if (!http.Request.HasFormContentType)
     {
-        return Results.Problem(statusCode: 415, title: "Invalid IFC", detail: "Expected multipart/form-data.");
+        return Results.Problem(statusCode: 415, title: "Invalid upload", detail: "Expected multipart/form-data.");
     }
 
     var form = await http.Request.ReadFormAsync(ct);
@@ -167,27 +172,46 @@ app.MapPost("/upload", async (
     {
         return Results.Problem(statusCode: 400, title: "Bad request", detail: "Field 'file' is required.");
     }
-    if (file.Length > maxIfcBytes)
+    if (file.Length > maxUploadBytes)
     {
         return Results.Problem(statusCode: 413, title: "File too large",
-            detail: $"Maximum allowed size is {maxIfcMb} MB.");
-    }
-    if (!".ifc".Equals(Path.GetExtension(file.FileName), StringComparison.OrdinalIgnoreCase))
-    {
-        return Results.Problem(statusCode: 415, title: "Invalid IFC", detail: "Only .ifc files are accepted.");
+            detail: $"Maximum allowed size is {maxUploadMb} MB.");
     }
 
-    byte[] head;
-    await using (var s = file.OpenReadStream())
+    var extension = Path.GetExtension(file.FileName);
+    SourceFormat? sourceFormat = extension.ToLowerInvariant() switch
     {
-        var buf = new byte[64];
-        var read = await s.ReadAsync(buf.AsMemory(0, 64), ct);
-        head = buf[..read];
+        ".ifc" => SourceFormat.Ifc,
+        ".skp" => SourceFormat.Skp,
+        _ => null,
+    };
+    if (sourceFormat is null)
+    {
+        return Results.Problem(statusCode: 415, title: "Invalid file type",
+            detail: "Only .ifc and .skp files are accepted.");
     }
-    var headText = Encoding.ASCII.GetString(head).TrimStart();
-    if (!headText.StartsWith("ISO-10303-21", StringComparison.Ordinal))
+
+    byte[] sourceBytes;
+    await using (var s = file.OpenReadStream())
+    using (var ms = new MemoryStream())
     {
-        return Results.Problem(statusCode: 415, title: "Invalid IFC", detail: "File does not look like an IFC document.");
+        await s.CopyToAsync(ms, ct);
+        sourceBytes = ms.ToArray();
+    }
+
+    if (sourceFormat == SourceFormat.Ifc)
+    {
+        var headText = Encoding.ASCII.GetString(sourceBytes.AsSpan(0, Math.Min(64, sourceBytes.Length))).TrimStart();
+        if (!headText.StartsWith("ISO-10303-21", StringComparison.Ordinal))
+        {
+            return Results.Problem(statusCode: 415, title: "Invalid IFC",
+                detail: "File does not look like an IFC document.");
+        }
+    }
+    else if (!IsValidSkpArchive(sourceBytes))
+    {
+        return Results.Problem(statusCode: 415, title: "Invalid SKP",
+            detail: "File does not look like a SketchUp (.skp) archive.");
     }
 
     var name = (form["name"].ToString() ?? Path.GetFileNameWithoutExtension(file.FileName)).Trim();
@@ -196,19 +220,12 @@ app.MapPost("/upload", async (
     var projectId = Guid.NewGuid();
     var publicToken = NewToken();
     var now = DateTimeOffset.UtcNow;
-
-    byte[] ifcBytes;
-    await using (var s = file.OpenReadStream())
-    using (var ms = new MemoryStream())
-    {
-        await s.CopyToAsync(ms, ct);
-        ifcBytes = ms.ToArray();
-    }
+    var originalFileName = LocalFileStorage.OriginalFileName(sourceFormat.Value);
 
     storage.EnsureProjectDir(projectId);
-    await storage.WriteFileAsync(projectId, LocalFileStorage.IfcFileName, ifcBytes, ct);
+    await storage.WriteFileAsync(projectId, originalFileName, sourceBytes, ct);
 
-    var project = Project.Create(projectId, publicToken, name, ifcBytes.Length, now);
+    var project = Project.Create(projectId, publicToken, name, sourceFormat.Value, sourceBytes.Length, now);
     db.Projects.Add(project);
     await db.SaveChangesAsync(ct);
 
@@ -217,7 +234,7 @@ app.MapPost("/upload", async (
 
     try
     {
-        var result = await converter.ConvertAsync(ifcBytes, projectId, ct);
+        var result = await converter.ConvertAsync(sourceBytes, projectId, sourceFormat.Value, ct);
         if (!storage.FileExists(projectId, LocalFileStorage.GlbFileName)
             || !storage.FileExists(projectId, LocalFileStorage.UsdzFileName)
             || !storage.FileExists(projectId, LocalFileStorage.ThumbnailFileName))
@@ -244,6 +261,7 @@ app.MapPost("/upload", async (
         token = publicToken,
         projectId,
         name = project.Name,
+        sourceFormat = project.SourceFormat.ToString().ToLowerInvariant(),
         status = project.Status.ToString(),
         shareUrl,
         qrSvg,
@@ -251,7 +269,7 @@ app.MapPost("/upload", async (
 }).DisableAntiforgery();
 
 // GET /files/{projectId}/{fileName}
-app.MapMethods("/files/{projectId:guid}/{fileName}", new[] { "GET", "HEAD" }, (HttpContext ctx, Guid projectId, string fileName, LocalFileStorage storage) =>
+app.MapMethods("/files/{projectId:guid}/{fileName}", new[] { "GET", "HEAD" }, (HttpContext ctx, Guid projectId, string fileName, IFileStorageService storage) =>
 {
     if (fileName is not (LocalFileStorage.GlbFileName or LocalFileStorage.UsdzFileName or LocalFileStorage.ThumbnailFileName))
     {
@@ -270,7 +288,7 @@ app.MapMethods("/files/{projectId:guid}/{fileName}", new[] { "GET", "HEAD" }, (H
         {
             LocalFileStorage.GlbFileName => "model/gltf-binary",
             LocalFileStorage.UsdzFileName => "model/vnd.usdz+zip",
-            LocalFileStorage.ThumbnailFileName => "image/png",
+            LocalFileStorage.ThumbnailFileName => "image/webp",
             _ => "application/octet-stream",
         };
         ctx.Response.Headers.ContentLength = headInfo.Length;
@@ -302,6 +320,7 @@ app.MapGet("/share/{token}", async (string token, AppDbContext db, CancellationT
         {
             name = project.Name,
             status = project.Status.ToString(),
+            sourceFormat = project.SourceFormat.ToString().ToLowerInvariant(),
             glbUrl = (string?)null,
             usdzUrl = (string?)null,
             thumbnailUrl = (string?)null,
@@ -317,6 +336,7 @@ app.MapGet("/share/{token}", async (string token, AppDbContext db, CancellationT
     {
         name = project.Name,
         status = project.Status.ToString(),
+        sourceFormat = project.SourceFormat.ToString().ToLowerInvariant(),
         glbUrl = FileUrl(project.Id, LocalFileStorage.GlbFileName),
         usdzUrl = FileUrl(project.Id, LocalFileStorage.UsdzFileName),
         thumbnailUrl = FileUrl(project.Id, LocalFileStorage.ThumbnailFileName),
@@ -345,5 +365,32 @@ app.MapGet("/qrcode/{token}", async (string token, AppDbContext db, QrCodeServic
 });
 
 app.Run();
+
+static bool IsValidSkpArchive(byte[] bytes)
+{
+    if (bytes.Length < 4 || bytes[0] != 0x50 || bytes[1] != 0x4B || bytes[2] != 0x03 || bytes[3] != 0x04)
+    {
+        return false;
+    }
+
+    try
+    {
+        using var ms = new MemoryStream(bytes);
+        using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
+        foreach (var entry in zip.Entries)
+        {
+            if (entry.FullName.StartsWith("SketchUp/", StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+    }
+    catch (InvalidDataException)
+    {
+        return false;
+    }
+
+    return false;
+}
 
 public partial class Program { }

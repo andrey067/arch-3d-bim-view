@@ -29,6 +29,9 @@ services:
       IFCCONVERT_PATH: /usr/local/bin/IfcConvert
       USD_FROM_GLTF_PATH: /usr/local/bin/usd_from_gltf
       CONVERSION_TIMEOUT_S: "${CONVERSION_TIMEOUT_S:-120}"
+      IFC_CONVERSION_TIMEOUT_S: "${IFC_CONVERSION_TIMEOUT_S:-120}"
+      SKP_CONVERSION_TIMEOUT_S: "${SKP_CONVERSION_TIMEOUT_S:-180}"
+      BLENDER_PATH: /opt/blender/blender
       AR_MAX_EXTENT_M: "${AR_MAX_EXTENT_M:-0.5}"
     ports:
       - "8080:8080"
@@ -47,6 +50,7 @@ services:
       ConnectionStrings__DefaultConnection: "Host=postgres;Port=5432;Database=${POSTGRES_DB:-arch3dar};Username=${POSTGRES_USER:-arch3dar};Password=${POSTGRES_PASSWORD:-arch3dar_secret}"
       DATA_ROOT: /data
       PublicBaseUrl: "${PUBLIC_BASE_URL:-https://localhost}"
+      MaxUploadMb: "${MAX_UPLOAD_MB:-100}"
       MaxIfcMb: "${MAX_IFC_MB:-100}"
       ConversionTimeoutS: "${CONVERSION_TIMEOUT_S:-120}"
       Converter__Url: "${CONVERTER_URL:-http://converter:8080}"

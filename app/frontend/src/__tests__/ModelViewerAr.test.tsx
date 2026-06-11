@@ -21,7 +21,7 @@ describe('SharePage AR attributes', () => {
           status: 'Ready',
           glbUrl: 'https://test.local/files/id/model.glb',
           usdzUrl: 'https://test.local/files/id/model.usdz',
-          thumbnailUrl: 'https://test.local/files/id/thumbnail.png',
+          thumbnailUrl: 'https://test.local/files/id/thumbnail.webp',
         }),
       }),
     );

@@ -1,11 +1,11 @@
-# Research: Arch3DAR — Correção MVP IFC → AR
+# Research: Arch3DAR — IFC/SKP → Web 3D + AR MVP
 
 **Phase**: 0
 **Branch**: `main`
 **Date**: 2026-06-10
 **Plan**: `specs/001-ifc-mvp-platform/plan.md`
 
-> Resolve decisões técnicas para Quick Look iOS, remoção de MinIO e pipeline USDZ. Substitui decisões R-02, R-06 parcial, R-08, R-10 do research anterior onde conflitam.
+> Decisões técnicas para MVP simplificado: IFC + SKP, storage local, USDZ Quick Look, Blender headless, thumbnail WebP. R-11…R-17 da correção permanecem válidos onde não conflitam; R-18+ estendem escopo SpecDrive.
 
 ---
 
@@ -19,7 +19,7 @@
     original.ifc
     model.glb
     model.usdz
-    thumbnail.png
+    thumbnail.webp
   ```
 - Backend expõe arquivos via `GET /files/{projectId}/model.glb` (e variantes) usando `Results.File(path, contentType)` — **sem redirect**, **sem presigned URL**.
 - `LocalFileStorage` encapsula create-dir, write-bytes, resolve-path, exists-check. Paths relativos (`projects/{id}/model.glb`) persistidos na tabela `projects`.
@@ -75,7 +75,7 @@
   |---|---|
   | `.glb` | `model/gltf-binary` |
   | `.usdz` | `model/vnd.usdz+zip` |
-  | `.png` | `image/png` |
+  | `.webp` | `image/webp` |
   | `.ifc` | `application/octet-stream` (não exposto publicamente no MVP) |
 - Headers adicionais: `Accept-Ranges: bytes` (GLB streaming para model-viewer).
 - **Proibido**: `return Redirect()`, presigned redirect, `proxy_redirect` no nginx.
@@ -126,7 +126,7 @@
     "name": "...",
     "glbUrl": "https://host/files/{projectId}/model.glb",
     "usdzUrl": "https://host/files/{projectId}/model.usdz",
-    "thumbnailUrl": "https://host/files/{projectId}/thumbnail.png"
+    "thumbnailUrl": "https://host/files/{projectId}/thumbnail.webp"
   }
   ```
 - URLs devem ser **absolutas** e **HTTPS** em produção (`PUBLIC_BASE_URL`).
@@ -174,7 +174,7 @@
   | GET | `/share/{token}` | metadados + URLs absolutas dos assets |
   | GET | `/files/{projectId}/model.glb` | stream GLB |
   | GET | `/files/{projectId}/model.usdz` | stream USDZ |
-  | GET | `/files/{projectId}/thumbnail.png` | stream PNG |
+  | GET | `/files/{projectId}/thumbnail.webp` | stream WebP |
   | GET | `/share/{token}/qr` ou `/qrcode/{token}` | SVG QR |
   | GET | `/health` | liveness |
 - Frontend: `HomePage` (upload) + `SharePage` (viewer em `/s/:token`).
@@ -212,7 +212,7 @@
 **Decision**
 - `UploadAndConvertTests` (integration):
   1. POST `/upload` com `sample.ifc` → 200, `status=Ready`.
-  2. Assert files exist on disk: `model.glb`, `model.usdz`, `thumbnail.png`.
+  2. Assert files exist on disk: `model.glb`, `model.usdz`, `thumbnail.webp`.
   3. GET `/files/{id}/model.glb` → 200, `Content-Type: model/gltf-binary`, no `Location` header.
   4. GET `/files/{id}/model.usdz` → 200, `Content-Type: model/vnd.usdz+zip`.
   5. GET `/share/{token}` → `usdzUrl` non-null, same-origin paths.
@@ -225,17 +225,79 @@
 
 ---
 
-## Cross-cutting summary (correction)
+## R-19. SKP → GLB (Blender headless)
+
+**Decision**
+- Pipeline primário (clarificação SpecDrive): **Blender 4.2 LTS headless**, import SKP nativo + export glTF 2.0 binary (GLB).
+- Script `skp_to_glb.py` invocado via:
+  ```bash
+  blender -b --python skp_to_glb.py -- \
+    --input /data/projects/{id}/original.skp \
+    --output /data/projects/{id}/model.glb
+  ```
+- Após export GLB, pipeline comum: `glb_normalize` → `usd_from_gltf` → thumbnail.
+- Validação upload SKP: extensão `.skp` + magic bytes `PK\x03\x04` (SKP é ZIP internamente) + presença de `SketchUp/` ou `model.skp` no zip (best-effort).
+- Timeout dedicado: `SKP_CONVERSION_TIMEOUT_S=180` (Blender startup + import mais lento que IfcConvert).
+
+**Rationale**
+- Blender preserva materiais, texturas e UV mapping melhor que Assimp para SKP.
+- Mesmo runtime Blender serve thumbnail (R-20) — um binário no sidecar.
+- Clarificação do usuário rejeitou DAE intermediário e Assimp como path primário.
+
+**Alternatives considered**
+- **SKP → DAE → GLB**: rejeitado — passo extra, perda de materiais.
+- **Assimp CLI**: rejeitado — SKP support limitado, materiais degradados.
+- **Blender + Assimp fallback**: adiado — YAGNI; adicionar só se import SKP falhar em produção.
+- **Trimble SDK standalone**: rejeitado — Blender já encapsula import.
+
+**Linux Docker note**
+- Instalar Blender 4.2 tarball oficial (amd64) no Dockerfile; dependências: `libgl1`, `libx11-6`, `libxi6`, `libxxf86vm1`.
+- SketchUp Importer add-on vem bundled no Blender; habilitar em script se necessário (`import addon_utils; addon_utils.enable("io_sketchup")`).
+- Validar na Phase B com fixture SKP real exportado do SketchUp 2023+.
+
+---
+
+## R-20. Thumbnail WebP (Blender headless)
+
+**Decision**
+- Formato: **`thumbnail.webp`** (clarificação SpecDrive).
+- Geração via `render_thumbnail.py` no Blender (mesmo container):
+  ```bash
+  blender -b --python render_thumbnail.py -- \
+    --input /data/projects/{id}/model.glb \
+    --output /data/projects/{id}/thumbnail.webp \
+    --size 512
+  ```
+- Cena: import GLB, câmera isométrica, luz área, fundo neutro, render Cycles ou EEVEE (EEVEE preferido por velocidade headless).
+- Fallback IFC-only (transição): IfcConvert `--thumbnail` → PNG convertido para WebP via Pillow até Phase C completar Blender para todos os formatos.
+- HTTP: `Content-Type: image/webp`.
+
+**Rationale**
+- WebP ~30% menor que PNG — melhora SC-003 (4G, poster first).
+- Blender render produz preview visualmente alinhado ao modelo 3D (materiais), superior a placeholder IfcConvert.
+- Unifica pipeline IFC e SKP no mesmo gerador de thumbnail.
+
+**Alternatives considered**
+- **Pillow placeholder**: rejeitado como destino final — não reflete materiais SKP.
+- **PNG + nginx content negotiation**: rejeitado — clarificação fixou WebP.
+- **glTF screenshot via headless Chrome**: rejeitado — complexidade desnecessária.
+
+---
+
+## Cross-cutting summary (IFC/SKP MVP)
 
 | Concern | Choice |
 |---|---|
+| Input formats | **`.ifc`** (IfcConvert) + **`.skp`** (Blender) |
 | Object storage | **Local filesystem** `/data/projects/{id}/` |
 | GLB delivery | Backend `Results.File`, same-origin, GET+HEAD |
 | GLB normalization | **`glb_normalize`** bake matrices + tabletop scale (`AR_MAX_EXTENT_M`) |
 | USDZ generation | **Google `usd_from_gltf`** on normalized GLB |
+| Thumbnail | **`thumbnail.webp`** via Blender headless render |
+| Converter topology | **Single sidecar** (IfcOpenShell + Blender + USDZ) |
 | iOS AR | `ios-src` + `rel="ar"` fallback + `model/vnd.usdz+zip` + HTTPS + no redirect |
 | Android AR | `src` GLB + `scene-viewer` mode |
-| Auth | **None** (MVP correction) |
+| Auth | **None** (MVP) |
 | Queue | **None** (synchronous convert on upload) |
 | Docker services | postgres, converter, backend, frontend+nginx (4) |
 
