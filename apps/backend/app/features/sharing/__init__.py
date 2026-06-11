@@ -1,0 +1,1 @@
+"""Sharing feature — ShareLink entities."""
