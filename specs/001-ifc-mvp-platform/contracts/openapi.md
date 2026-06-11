@@ -1,335 +1,455 @@
-# OpenAPI / HTTP Contracts: Arch3DAR MVP
+# API Contract — App 3D Viewer
 
-**Phase**: 1
-**Branch**: `001-ifc-mvp-platform`
-**Date**: 2026-06-09
-**Spec**: `specs/001-ifc-mvp-platform/spec.md`
+**Feature**: `001-ifc-mvp-platform` (App 3D Viewer MVP)
+**Status**: Contrato de superfície HTTP para o MVP.
+**Geração**: OpenAPI auto-gerado pelo FastAPI na implementação; este
+documento é a **especificação de superfície** que precede a geração
+automática.
 
-> All MVP contracts. Authentication is **cookie-based** (ASP.NET Core Identity); the public share endpoint is the only anonymous one. ProblemDetails (`application/problem+json`) is the canonical error shape (RFC 7807) for non-2xx responses. Every request is expected to carry a `X-Correlation-Id` header (the server generates one if absent and echoes it back).
+> **Sobre este contrato**: A stack é REST + JSON com OpenAPI
+> auto-gerado. Este documento lista os endpoints, payloads e
+> códigos de status do MVP. O conteúdo aqui é a **fonte da
+> verdade** até a implementação produzir o OpenAPI equivalente.
 
 ---
 
-## Conventions
+## Convenções
 
-- **Base URL (dev)**: `http://localhost:5000`
-- **Base URL (public)**: `${PUBLIC_BASE_URL}` (env)
-- **Auth**: `POST /auth/login` sets the `.AspNetCore.Identity.Application` cookie. All `/api/projects/*` endpoints require it. `GET /api/share/{token}` does **not**.
-- **Correlation**: every request/response carries `X-Correlation-Id`. Server-side, every `ILogger` event has the same value attached via Serilog `LogContext`.
-- **Errors**: `application/problem+json` per RFC 7807. Examples below.
-- **Time**: ISO-8601 UTC.
-- **JSON casing**: `camelCase`. Enum values are kebab-case strings (e.g. `ready-to-publish`), matching the spec FR-006 status names.
+- **Base URL**: `/api/v1`
+- **Autenticação**: Bearer JWT (Access token) no header
+  `Authorization: Bearer <access_token>` para endpoints privados.
+  Endpoints marcados **[public]** não exigem auth.
+- **Content-Type**: `application/json` (request e response) exceto
+  onde explicitado.
+- **Códigos de erro** (consistentes em toda a API):
+  - `400` validação de payload
+  - `401` sem token / token inválido / expirado
+  - `403` autenticado mas sem permissão sobre o recurso
+  - `404` recurso não encontrado
+  - `409` conflito de estado (ex.: tentar retentar job que não é
+    `failed`)
+  - `413` payload grande demais (upload)
+  - `415` formato não suportado / magic bytes inválidos
+  - `422` invariante violada
+  - `429` rate-limited
+  - `500` erro inesperado
+- **Identificadores**: UUID v4 em todos os IDs públicos.
+- **Datas**: ISO-8601 UTC (`2026-06-11T13:45:00Z`).
+- **Paginação**: cursor-based, parâmetros `?cursor=&limit=` (limite
+  padrão 20, máximo 100).
 
-### ProblemDetails shape
+---
 
+## Recursos
+
+### Auth — `/api/v1/auth`
+
+#### `POST /api/v1/auth/register` — criar conta
+
+Request:
 ```json
 {
-  "type": "https://arch3dar.com/errors/invalid-state-transition",
-  "title": "Invalid state transition",
-  "status": 409,
-  "detail": "Cannot publish a project in status 'processing'. Wait for conversion to finish.",
-  "instance": "/api/projects/8b7e4f1a-.../publish",
-  "correlationId": "f0e1d2c3-b4a5-..."
+  "email": "user@example.com",
+  "password": "string (>=8 chars)",
+  "display_name": "string (opcional)"
 }
 ```
-
-The `correlationId` field is added to the standard ProblemDetails by the global error middleware; it mirrors the `X-Correlation-Id` header.
-
----
-
-## Endpoints (summary)
-
-| Method | Path | Auth | Spec FR |
-|---|---|---|---|
-| POST | `/auth/register` | none | — |
-| POST | `/auth/login` | none | — |
-| POST | `/auth/logout` | cookie | — |
-| GET  | `/api/projects` | cookie | FR-021 |
-| POST | `/api/projects` | cookie | FR-001, FR-002 |
-| GET  | `/api/projects/{id}` | cookie | FR-022 |
-| POST | `/api/projects/{id}/publish` | cookie | FR-011, FR-013 |
-| GET  | `/api/share/{token}` | **none** | FR-015, FR-025 |
-| GET  | `/health` | none | — |
-
----
-
-## POST /auth/register
-
-Creates a new user. The first user is the first tenant. After registration, the cookie is set automatically.
-
-**Request**
-
-```http
-POST /auth/register
-Content-Type: application/json
-
-{
-  "email": "alice@example.com",
-  "password": "correcthorsebatterystaple"
-}
-```
-
-**Validation**
-- `email` must be a valid email.
-- `password` must be ≥ 8 chars (Identity default).
-
-**Responses**
-- `200 OK` — sets the auth cookie, returns `{ "userId": "..." }`.
-- `400 Bad Request` — validation failed (ProblemDetails).
-- `409 Conflict` — email already in use.
-
+Response `201`:
 ```json
-{ "userId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b" }
+{
+  "id": "uuid",
+  "email": "user@example.com",
+  "display_name": "string|null",
+  "created_at": "iso8601"
+}
 ```
+Erros: `400` (email inválido), `409` (email já existe), `422`
+(senha fraca).
+
+#### `POST /api/v1/auth/login` — autenticar
+
+Request:
+```json
+{ "email": "user@example.com", "password": "string" }
+```
+Response `200`:
+```json
+{
+  "access_token": "jwt",
+  "refresh_token": "opaque",
+  "token_type": "Bearer",
+  "expires_in": 900
+}
+```
+Erros: `401` (credenciais inválidas), `429` (rate-limited).
+
+#### `POST /api/v1/auth/refresh` — rotacionar tokens
+
+Request:
+```json
+{ "refresh_token": "opaque" }
+```
+Response `200`: mesmo payload de `/login` (Access + novo Refresh;
+o antigo é invalidado).
+
+Erros: `401` (token inválido/expirado/revogado).
+
+#### `POST /api/v1/auth/logout` — revogar refresh
+
+Request:
+```json
+{ "refresh_token": "opaque" }
+```
+Response `204`. Idempotente.
 
 ---
 
-## POST /auth/login
+### Projects — `/api/v1/projects`
 
-**Request**
+#### `POST /api/v1/projects` — criar projeto
 
-```http
-POST /auth/login
-Content-Type: application/json
-
-{ "email": "alice@example.com", "password": "correcthorsebatterystaple" }
+Request:
+```json
+{ "name": "string", "description": "string (opcional)" }
 ```
+Response `201`: payload do projeto criado.
 
-**Responses**
-- `204 No Content` — cookie set.
-- `401 Unauthorized` — bad credentials.
+#### `GET /api/v1/projects` — listar projetos do owner
 
----
+Query: `?archived=true&cursor=&limit=`
 
-## POST /auth/logout
-
-Clears the cookie.
-
-**Responses**
-- `204 No Content`
-
----
-
-## POST /api/projects
-
-Creates a project AND uploads its IFC in a single multipart call (FR-001, FR-002, FR-003, FR-004, FR-005). The project is created in status `upload-received`.
-
-**Request**
-
-```http
-POST /api/projects
-Cookie: .AspNetCore.Identity.Application=...
-Content-Type: multipart/form-data; boundary=----abc
-
-------abc
-Content-Disposition: form-data; name="name"
-
-Living Room Sofa
-------abc
-Content-Disposition: form-data; name="description"
-
-3-seat sofa in walnut
-------abc
-Content-Disposition: form-data; name="clientLabel"
-
-Alice
-------abc
-Content-Disposition: form-data; name="file"; filename="project.ifc"
-Content-Type: application/octet-stream
-
-<binary>
-------abc--
-```
-
-**Validation (server-side, in order)**
-1. `name` 1–200 chars.
-2. `description` ≤ 2000 chars (optional).
-3. `clientLabel` ≤ 200 chars (optional).
-4. `file` present, size ≤ `MAX_IFC_MB` × 1024 × 1024.
-5. `file` content starts with `ISO-10303-21;` (signature check).
-6. `file` filename extension is `.ifc`.
-
-The file is streamed directly to MinIO (no in-memory buffering) under key `ifc-files/projects/{projectId}/source.ifc`. The project row is created only after the MinIO upload succeeds (atomicity).
-
-**Responses**
-
-- `201 Created`
-  ```json
-  {
-    "id": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-    "name": "Living Room Sofa",
-    "status": "upload-received",
-    "createdAt": "2026-06-09T12:00:00Z"
-  }
-  ```
-- `400 Bad Request` — validation failed (ProblemDetails with `type` and `detail`).
-- `413 Payload Too Large` — file too big.
-- `415 Unsupported Media Type` — not an IFC file.
-
----
-
-## GET /api/projects
-
-Lists the calling user's projects (FR-021). Tenant-scoped.
-
-**Request**
-
-```http
-GET /api/projects
-Cookie: .AspNetCore.Identity.Application=...
-```
-
-**Query params**
-- `status` (optional) — filter by `ProjectStatus` value.
-- `limit` (optional, default 50, max 200) — page size.
-- `cursor` (optional) — opaque pagination cursor (createdAt + id).
-
-**Response**
-
-```http
-HTTP/1.1 200 OK
-Content-Type: application/json
-
+Response `200`:
+```json
 {
   "items": [
     {
-      "id": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-      "name": "Living Room Sofa",
-      "clientLabel": "Alice",
-      "status": "ready-to-publish",
-      "thumbnailUrl": "https://minio:9000/thumbnails/projects/8b.../thumb.png?X-Amz-...",
-      "createdAt": "2026-06-09T12:00:00Z"
+      "id": "uuid",
+      "name": "string",
+      "description": "string|null",
+      "latest_model_file": { "id": "uuid", "source_format": "ifc" } | null,
+      "is_viewable": true,
+      "created_at": "iso8601",
+      "updated_at": "iso8601",
+      "archived_at": "iso8601|null"
     }
   ],
-  "nextCursor": null
+  "next_cursor": "string|null"
 }
 ```
 
-`thumbnailUrl` is a presigned MinIO URL (TTL 5 min). It is `null` if the thumbnail has not been generated yet (status `upload-received` or `processing`).
+#### `GET /api/v1/projects/{project_id}` — detalhe
 
----
-
-## GET /api/projects/{id}
-
-Project detail (FR-022).
-
-**Request**
-
-```http
-GET /api/projects/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b
-Cookie: .AspNetCore.Identity.Application=...
-```
-
-**Responses**
-- `200 OK` — `ProjectDto` (see data-model.md).
-- `404 Not Found` — caller does not own the project, **or** it doesn't exist (no enumeration leak; SC-006).
-
----
-
-## POST /api/projects/{id}/publish
-
-Publishes a project. Idempotent (FR-013). On the first call:
-1. Validates `Status == 'ready-to-publish'`.
-2. Creates a `ShareLink` row (unique on `ProjectId`).
-3. Generates a QR code from `${PUBLIC_BASE_URL}/s/{PublicToken}`.
-4. Uploads the QR PNG to MinIO.
-5. Sets `Project.Status = 'published'`, `PublishedAt = now()`.
-6. Returns the result.
-
-On a second call, the existing `ShareLink` is returned without re-uploading.
-
-**Request**
-
-```http
-POST /api/projects/8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b/publish
-Cookie: .AspNetCore.Identity.Application=...
-```
-
-**Responses**
-
-- `200 OK`:
-  ```json
-  {
-    "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-    "publicToken": "3f2e1d0c-b9a8-7654-3210-fedcba987654",
-    "publicUrl": "https://app.example.com/s/3f2e1d0c-b9a8-7654-3210-fedcba987654",
-    "qrCodeUrl": "https://minio:9000/qrcodes/projects/8b.../qr.png?X-Amz-..."
-  }
-  ```
-- `404 Not Found` — caller does not own the project.
-- `409 Conflict` — project status is not `ready-to-publish`. ProblemDetails `type=https://arch3dar.com/errors/invalid-state-transition`.
-
----
-
-## GET /api/share/{token}  (anonymous, public)
-
-Returns the minimum data needed to render the public page (FR-015, FR-025). No internal ids, no tenant info, no `errorMessage`.
-
-**Request**
-
-```http
-GET /api/share/3f2e1d0c-b9a8-7654-3210-fedcba987654
-```
-
-**Responses**
-
-- `200 OK`:
-  ```json
-  {
-    "name": "Living Room Sofa",
-    "clientLabel": "Alice",
-    "status": "published",
-    "glbUrl": "https://minio:9000/glb-files/projects/8b.../model.glb?X-Amz-...",
-    "thumbnailUrl": "https://minio:9000/thumbnails/projects/8b.../thumb.png?X-Amz-..."
-  }
-  ```
-- `404 Not Found` — token unknown, or the project is not in `published` status yet. Same response either way (no enumeration leak).
-
----
-
-## GET /health
-
-**Response**
-- `200 OK` — `{"status":"ok"}` if the API process is up. Does **not** check Postgres or MinIO. Used by docker-compose `healthcheck`.
-
----
-
-## Error catalog
-
-| `type` suffix | HTTP | When |
-|---|---|---|
-| `/errors/validation` | 400 | FluentValidation failure. `errors` object included. |
-| `/errors/invalid-ifc` | 415 | File signature check failed. |
-| `/errors/file-too-large` | 413 | File > `MAX_IFC_MB`. |
-| `/errors/invalid-state-transition` | 409 | `TransitionTo(...)` rejected, or publish called on non-ready project. |
-| `/errors/not-found` | 404 | Resource missing OR cross-tenant. |
-| `/errors/unauthorized` | 401 | Auth required and missing. |
-| `/errors/forbidden` | 403 | Authenticated but not allowed. |
-| `/errors/internal` | 500 | Unhandled exception. Stack trace **never** in body (FR-028). |
-
----
-
-## Python Converter HTTP Contract (internal)
-
-The Python converter sidecar exposes a tiny HTTP API consumed by `HttpModelConverter` in the .NET backend. This is an **internal** contract (not exposed to the browser); it is documented here so the two services can be developed independently.
-
-`POST http://converter:8080/convert`
-
-```json
-{ "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b" }
-```
-
-Response:
-
+Response `200`:
 ```json
 {
-  "glbKey": "projects/8b7e4f1a-.../model.glb",
-  "thumbnailKey": "projects/8b7e4f1a-.../thumb.png",
-  "durationMs": 12345
+  "id": "uuid",
+  "name": "string",
+  "description": "string|null",
+  "model_files": [ { "...": "ModelFile" } ],
+  "share_links": [ { "...": "ShareLink" } ],
+  "created_at": "iso8601",
+  "updated_at": "iso8601",
+  "archived_at": "iso8601|null"
 }
 ```
 
-Errors:
-- `400` if `projectId` not in `Processing` status.
-- `500` with `{ "reason": "..." }` on conversion failure (the .NET side persists this as `ErrorMessage`).
+#### `PATCH /api/v1/projects/{project_id}` — atualizar nome/descrição
 
-The converter itself owns the Postgres polling + `FOR UPDATE SKIP LOCKED` claim; the .NET side never tells it "what" to convert beyond the project id.
+Request:
+```json
+{ "name": "string (opcional)", "description": "string (opcional)" }
+```
+
+#### `POST /api/v1/projects/{project_id}/archive` — arquivar
+#### `POST /api/v1/projects/{project_id}/unarchive` — desarquivar
+#### `DELETE /api/v1/projects/{project_id}` — remover definitivamente
+
+`DELETE` remove o projeto, seus `ModelFile`s, todos os `ConversionJob`s
+e todos os `ShareLink`s; remove os arquivos do storage.
+
+---
+
+### Model files — `/api/v1/projects/{project_id}/files`
+
+#### `POST /api/v1/projects/{project_id}/files` — upload
+
+Request: `multipart/form-data`
+- `file`: binário do modelo (`ifc`/`dae`/`obj`/`glb`)
+- `source_format`: enum (opcional — se ausente, detectado por magic
+  bytes)
+
+Response `202`:
+```json
+{
+  "model_file_id": "uuid",
+  "conversion_job_id": "uuid",
+  "status": "pending"
+}
+```
+Erros: `400` (payload), `404` (projeto), `409` (projeto arquivado),
+`413` (limite de tamanho), `415` (formato não suportado / magic
+bytes inválido).
+
+#### `GET /api/v1/projects/{project_id}/files` — listar arquivos do projeto
+
+Response `200`: lista de `ModelFile` (sem o binário).
+
+#### `GET /api/v1/projects/{project_id}/files/{file_id}` — detalhe
+
+Response `200`: payload de `ModelFile` (com metadados extraídos
+quando o job estiver `ready`).
+
+#### `DELETE /api/v1/projects/{project_id}/files/{file_id}` — remover
+
+Remove o arquivo, o `ConversionJob` associado, e o GLB/thumbnail
+produzido (se existirem).
+
+---
+
+### Conversion jobs — `/api/v1/jobs`
+
+#### `GET /api/v1/jobs/{job_id}` — consultar status
+
+Response `200`:
+```json
+{
+  "id": "uuid",
+  "model_file_id": "uuid",
+  "status": "pending|running|ready|failed",
+  "attempts": 0,
+  "last_error": "string|null",
+  "started_at": "iso8601|null",
+  "finished_at": "iso8601|null",
+  "duration_ms": 0,
+  "glb_url": "string|null",
+  "thumbnail_url": "string|null"
+}
+```
+
+#### `POST /api/v1/jobs/{job_id}/retry` — retentar job `failed`
+
+Cria um novo `ConversionJob` para o mesmo `ModelFile`.
+
+Erros: `409` (job não está em `failed`).
+
+---
+
+### Share links — `/api/v1/projects/{project_id}/shares`
+
+#### `POST /api/v1/projects/{project_id}/shares` — criar link
+
+Request:
+```json
+{
+  "model_file_id": "uuid"
+}
+```
+Response `201`:
+```json
+{
+  "id": "uuid",
+  "token": "opaque-string",
+  "url": "/s/{token}",
+  "model_file_id": "uuid",
+  "created_at": "iso8601"
+}
+```
+
+#### `GET /api/v1/projects/{project_id}/shares` — listar
+
+#### `POST /api/v1/shares/{token}/revoke` — revogar
+
+(Idempotente; `204`.)
+
+---
+
+### Public share viewer — `/s`
+
+Estes endpoints são **[public]**: autenticam pela posse do token, não
+por JWT.
+
+#### `GET /s/{token}` — **[public]** página de visualização
+
+Retorna HTML renderizado pelo frontend (SPA). A página carrega o GLB
+e o thumbnail via endpoints autenticados-por-token abaixo.
+
+#### `GET /s/{token}/manifest` — **[public]** manifest do modelo
+
+Response `200`:
+```json
+{
+  "model_file_id": "uuid",
+  "format": "glb",
+  "glb_url": "/s/{token}/model.glb",
+  "thumbnail_url": "/s/{token}/thumbnail.webp",
+  "project_name": "string",
+  "uploader_display_name": "string|null"
+}
+```
+
+#### `GET /s/{token}/model.glb` — **[public]** binário do GLB
+
+Response `200` com `Content-Type: model/gltf-binary`. Suporta HTTP
+range requests.
+
+#### `GET /s/{token}/thumbnail.webp` — **[public]** thumbnail
+
+Response `200` com `Content-Type: image/webp`.
+
+---
+
+## Health
+
+#### `GET /api/v1/health` — **[public]** liveness
+
+Response `200`: `{ "status": "ok" }`
+
+#### `GET /api/v1/health/ready` — **[public]** readiness
+
+Verifica DB, Redis e storage. `200` se tudo saudável, `503` caso
+contrário.
+
+---
+
+## Modelo JSON de superfície
+
+### `User`
+```json
+{
+  "id": "uuid",
+  "email": "string",
+  "display_name": "string|null",
+  "created_at": "iso8601"
+}
+```
+
+### `Project`
+```json
+{
+  "id": "uuid",
+  "name": "string",
+  "description": "string|null",
+  "created_at": "iso8601",
+  "updated_at": "iso8601",
+  "archived_at": "iso8601|null"
+}
+```
+
+### `ModelFile`
+```json
+{
+  "id": "uuid",
+  "project_id": "uuid",
+  "uploader_id": "uuid",
+  "original_filename": "string",
+  "source_format": "ifc|dae|obj|glb",
+  "size_bytes": 0,
+  "uploaded_at": "iso8601",
+  "content_hash": "string (hex sha256)"
+}
+```
+
+### `ConversionJob`
+```json
+{
+  "id": "uuid",
+  "model_file_id": "uuid",
+  "status": "pending|running|ready|failed",
+  "attempts": 0,
+  "last_error": "string|null",
+  "started_at": "iso8601|null",
+  "finished_at": "iso8601|null",
+  "duration_ms": 0,
+  "glb_url": "string|null",
+  "thumbnail_url": "string|null"
+}
+```
+
+### `ShareLink`
+```json
+{
+  "id": "uuid",
+  "token": "opaque",
+  "project_id": "uuid",
+  "model_file_id": "uuid",
+  "created_at": "iso8601",
+  "revoked_at": "iso8601|null"
+}
+```
+
+---
+
+## Contrato interno: enfileiramento Celery
+
+> O worker Celery é parte do mesmo processo Python
+> (`apps/backend/app/conversion/`), portanto não há contrato HTTP
+> entre backend e worker. Há, contudo, um **contrato de payload**
+> via Celery.
+
+**Task**: `conversion.process_model_file`
+
+**Argumentos**:
+```python
+{
+  "job_id": "uuid",
+  "model_file_id": "uuid",
+  "project_id": "uuid",
+  "source_format": "ifc|dae|obj|glb",
+  "original_storage_key": "string",
+}
+```
+
+**Atualizações de estado** (escrita pelo worker, observável via
+`GET /api/v1/jobs/{job_id}`):
+- `pending → running`: marca `started_at`, incrementa `attempts`.
+- `running → ready`: marca `finished_at`, popula `glb_storage_key`
+  e `thumbnail_storage_key`, popula `duration_ms`.
+- `running → failed`: marca `finished_at`, popula `last_error`,
+  popula `duration_ms`.
+
+**Idempotência**:
+- Worker lê `ModelFile` e seu `ConversionJob`; antes de qualquer
+  mutação, faz update condicional `WHERE status = 'pending' OR
+  (status = 'failed' AND attempts < MAX_ATTEMPTS)`.
+- Re-encoding: re-uploads criam um novo `ConversionJob`; o worker
+  nunca sobrescreve artefatos de jobs anteriores.
+
+---
+
+## Headers de correlação
+
+- Toda request aceita `X-Correlation-Id: <opaque>`. Se ausente, o
+  backend gera um. O header é ecoado na response e propagado nos
+  logs estruturados do worker.
+
+---
+
+## Limites do MVP (validados em zigue-zague no backend)
+
+| Limite | Valor | Origem |
+|---|---|---|
+| Tamanho máximo de upload | `MAX_UPLOAD_MB` MB | Constante no core |
+| Tentativas de processamento | `MAX_CONVERSION_ATTEMPTS` | Constante no core |
+| Tamanho do access token | 15 min | Constante no core |
+| Tamanho do refresh token | 30 dias (rotação) | Constante no core |
+| Largura mínima de senha | 8 chars | Validação Pydantic |
+| Rate limit auth | 10 req/min/IP | Middleware |
+
+---
+
+## Out of scope (sem endpoint no MVP)
+
+Os itens abaixo **não** têm endpoint na API MVP e não devem ser
+assumidos:
+- Comentários em modelo
+- Listagem/busca global de modelos de outros usuários
+- Versionamento explícito
+- Permissões granulares (roles)
+- Métricas operacionais expostas
+- Endpoints admin
+- BIM tree / propriedades IFC
+- `view_count` em ShareLink
+- `metadata` extraído do modelo (vertex_count, material_count, etc.)
+- `expires_at` em ShareLink
+- STL como formato de entrada
+- Geração/download de USDZ server-side

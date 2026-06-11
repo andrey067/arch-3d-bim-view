@@ -1,224 +1,263 @@
-# Data Model: Arch3DAR MVP
+# Data Model — App 3D Viewer (conceitual)
 
-**Phase**: 1
-**Branch**: `001-ifc-mvp-platform`
-**Date**: 2026-06-09
-**Spec**: `specs/001-ifc-mvp-platform/spec.md`
-**Research**: `specs/001-ifc-mvp-platform/research.md`
+**Feature**: `001-ifc-mvp-platform` (App 3D Viewer MVP)
+**Status**: Conceitual (sem migrations, sem DDL, sem código de ORM).
 
-> The MVP needs four persistent entities: `User` (from ASP.NET Identity), `Project`, `ShareLink`, plus the ASP.NET Identity role/user/claim/role-claim tables. The data model is intentionally narrow — it is exactly the data needed to satisfy the 33 functional requirements and no more.
-
----
-
-## ER overview
-
-```
-┌──────────────┐        ┌──────────────┐        ┌──────────────┐
-│  IdentityUser│ 1    0 │   Project    │ 1    0 │  ShareLink   │
-│  (Identity)  │────────│              │────────│              │
-└──────────────┘        └──────────────┘        └──────────────┘
-        ▲                       │
-        │                       │ 1
-        │                       ▼
-        │                ┌──────────────┐
-        │                │  ProjectFile │  (object keys, not a separate table)
-        │                │  (MinIO)     │
-        │                └──────────────┘
-        │
-        └────── owns ────► Project.OwnerId
-```
-
-The Project entity holds the storage keys for its artifacts; the bytes live in MinIO. There is no separate `ProjectFile` table — adding one would be premature.
+> Este documento descreve **entidades, atributos, relacionamentos e
+> regras de validação** no nível conceitual. Implementação
+> (SQLAlchemy 2 `Mapped[...]`, Pydantic v2 schemas, Alembic) é
+> responsabilidade da fase de implementação e não é fixada aqui.
 
 ---
 
-## Entities
+## Visão geral
 
-### `Project` (table `projects`)
+O modelo é composto por **cinco entidades** que refletem o fluxo do
+produto: um usuário autenticado, projetos (agrupamento humano),
+arquivos de modelo (recurso físico carregado), jobs de conversão
+(unidade de processamento assíncrono) e links de compartilhamento
+(token público para o cliente final).
 
-The unit of work. One tenant, one source file, one 3D model.
+```
+User ───< Project ───< ModelFile ───< ConversionJob
+                                       │
+                                       │
+User ───< ShareLink >──── Project
+```
 
-| Field | Type | Constraints | Description |
+Relacionamentos em texto:
+- Um `User` possui zero ou mais `Project`.
+- Um `Project` possui um ou mais `ModelFile` (re-uploads são permitidos;
+  cada `ModelFile` representa uma versão física carregada).
+- Cada `ModelFile` está associado a um `ConversionJob` (relação 1:1 —
+  um arquivo gera no máximo um job por vez; re-uploads criam novos
+  jobs para o mesmo `Project`).
+- Um `Project` possui zero ou mais `ShareLink`. Um `ShareLink` aponta
+  para o `ModelFile` que está sendo compartilhado (não para o
+  `Project` inteiro) — assim o owner pode compartilhar uma versão
+  específica.
+
+---
+
+## Entidades
+
+### User
+
+Representa uma conta autenticada (profissional que faz upload).
+
+| Atributo | Tipo | Restrições | Descrição |
 |---|---|---|---|
-| `Id` | `uuid` | PK, default `gen_random_uuid()` | Internal primary key. **Never** exposed in public URLs. |
-| `OwnerId` | `uuid` | FK → `AspNetUsers(Id)`, NOT NULL, indexed | Owning tenant. All queries are filtered by `OwnerId` via a global query filter. |
-| `Name` | `varchar(200)` | NOT NULL | Project display name. |
-| `Description` | `varchar(2000)` | NULL | Optional. |
-| `ClientLabel` | `varchar(200)` | NULL | Optional free-form client label (FR-001). |
-| `Status` | `varchar(32)` | NOT NULL, default `'UploadReceived'` | One of the `ProjectStatus` enum values (see below). |
-| `ErrorMessage` | `varchar(500)` | NULL | User-readable failure reason (FR-009, FR-028). NULL when not failed. |
-| `IfcObjectKey` | `varchar(512)` | NULL | MinIO key for the original IFC. NULL only briefly during upload commit. |
-| `GlbObjectKey` | `varchar(512)` | NULL | MinIO key for the generated GLB. NULL until conversion completes. |
-| `ThumbnailObjectKey` | `varchar(512)` | NULL | MinIO key for the generated thumbnail. NULL until conversion completes. |
-| `IfcSizeBytes` | `bigint` | NULL | Uploaded file size in bytes (for quota / display). |
-| `ConversionStartedAt` | `timestamptz` | NULL | Set when the worker claims the row. Used by the watchdog. |
-| `ConversionDurationMs` | `bigint` | NULL | Wall-clock conversion time. NULL until success. |
-| `CreatedAt` | `timestamptz` | NOT NULL, default `now()` | FR-021 sortable timestamp. |
-| `UpdatedAt` | `timestamptz` | NOT NULL, default `now()` | Updated on every state transition (FR-027 log correlation). |
-| `PublishedAt` | `timestamptz` | NULL | Set once on first publish. |
+| `id` | UUID | PK, gerado no servidor | Identificador estável. |
+| `email` | string | único, normalizado (lower) | Login. |
+| `password_hash` | string | não-nulo, opaco (bcrypt/argon2) | Hash da senha. Senha nunca armazenada. |
+| `display_name` | string | opcional | Nome exibido no UI. |
+| `created_at` | timestamp | imutável | Instante de criação. |
+| `updated_at` | timestamp | atualizado em qualquer mutação | Última modificação. |
+| `is_active` | bool | default `true` | Desativação manual. |
 
-**Indexes**:
-- PK on `Id`.
-- `ix_projects_owner_id` on `(OwnerId)`.
-- `ix_projects_status` on `(Status)` — used by the converter's `FOR UPDATE SKIP LOCKED` claim.
-- `ix_projects_owner_id_created_at` on `(OwnerId, CreatedAt DESC)` — dashboard list query.
+**Validações**:
+- `email` deve ser sintaticamente válido.
+- `password` no momento do registro: ≥ 8 caracteres, não-comprável a
+  email, hash obrigatório antes de persistir.
+- `password_hash` nunca é exposto em responses.
 
-**State machine** (`Status` column):
+### Project
 
-```
-                   ┌────────────────────┐
-                   │   UploadReceived   │  (created on upload commit)
-                   └──────────┬─────────┘
-                              │ worker claims
-                              ▼
-                   ┌────────────────────┐
-                   │     Processing     │  (worker running IfcConvert)
-                   └──────────┬─────────┘
-                  success     │     failure (or 5-min watchdog timeout)
-              ┌───────────────┴───────────────┐
-              ▼                               ▼
-   ┌────────────────────┐          ┌────────────────────┐
-   │ ReadyToPublish     │          │       Failed       │
-   └──────────┬─────────┘          └────────────────────┘
-              │ user clicks Publish
-              ▼
-   ┌────────────────────┐
-   │      Published     │  (terminal for the lifecycle; ShareLink row exists)
-   └────────────────────┘
-```
+Representa um projeto do usuário — agrupamento humano de um ou mais
+modelos carregados.
 
-`TransitionTo(ProjectStatus next)` is the single method that validates a transition. Anything not on the diagram throws `InvalidStateTransitionException`. There is **no** automatic `Failed → Processing` retry; a user retries by uploading a new file (which becomes a new Project).
-
----
-
-### `ShareLink` (table `share_links`)
-
-The unguessable, public-token record. Exactly one row per published project (FR-013 idempotency).
-
-| Field | Type | Constraints | Description |
+| Atributo | Tipo | Restrições | Descrição |
 |---|---|---|---|
-| `Id` | `uuid` | PK | Internal id (not exposed). |
-| `ProjectId` | `uuid` | FK → `projects(Id)` ON DELETE CASCADE, NOT NULL, **unique** | One-to-one. The unique index enforces idempotency. |
-| `PublicToken` | `uuid` | NOT NULL, **unique** | The unguessable token used in `/s/{token}`. Separate from `Project.Id` to avoid leaking internal ids (FR-014, FR-025). |
-| `QrCodeObjectKey` | `varchar(512)` | NULL | MinIO key for the QR PNG. |
-| `CreatedAt` | `timestamptz` | NOT NULL, default `now()` | Set on first publish. |
+| `id` | UUID | PK | Identificador estável. |
+| `owner_id` | UUID | FK → `User.id`, não-nulo | Dono. |
+| `name` | string | 1–120 chars, não-vazio | Nome humano. |
+| `description` | text | opcional | Descrição livre. |
+| `created_at` | timestamp | imutável | Instante de criação. |
+| `updated_at` | timestamp | atualizado em qualquer mutação | Última modificação. |
+| `archived_at` | timestamp | nullable | Soft-delete (projetos arquivados não aparecem em listagens padrão). |
 
-**Indexes**:
-- PK on `Id`.
-- **Unique** on `ProjectId` (enforces one-share-per-project, FR-013).
-- **Unique** on `PublicToken` (drives the public lookup query).
+**Validações**:
+- Apenas o `owner` pode ler/mutar/excluir o `Project`.
+- `name` trimmed; `""` rejeitado.
+- Re-uploads não alteram `name` (a versão é controlada via
+  `ModelFile`).
 
----
+### ModelFile
 
-### ASP.NET Identity tables (managed by `AddIdentity`)
+Representa o arquivo de modelo carregado dentro de um `Project`.
 
-These are not designed here — they are the standard `AspNetUsers`, `AspNetRoles`, `AspNetUserRoles`, `AspNetUserClaims`, `AspNetUserLogins`, `AspNetUserTokens`, `AspNetRoleClaims` tables. The MVP uses only `AspNetUsers` and `AspNetRoles`.
+| Atributo | Tipo | Restrições | Descrição |
+|---|---|---|---|
+| `id` | UUID | PK | Identificador estável. |
+| `project_id` | UUID | FK → `Project.id`, não-nulo | Projeto dono. |
+| `uploader_id` | UUID | FK → `User.id`, não-nulo | Quem subiu. |
+| `original_filename` | string | ≤ 255 chars, sanitizado | Nome do arquivo original. |
+| `source_format` | enum | não-nulo | `ifc` \| `dae` \| `obj` \| `glb`. |
+| `size_bytes` | int64 | > 0, ≤ limite do MVP | Tamanho. |
+| `original_storage_key` | string | path abstrato, não-nulo | Chave para `ObjectStorage` (resolve para `storage/originals/<project_id>/<file_id>__<sanitized_name>`). |
+| `uploaded_at` | timestamp | imutável | Instante do upload. |
+| `content_hash` | string (hex) | SHA-256, 64 chars | Integridade. |
 
-`AspNetUsers` is extended with nothing; `OwnerId` on `Project` is a FK to `AspNetUsers.Id`.
+**Validações**:
+- `source_format` deve estar entre os suportados pelo MVP
+  (`ifc`, `dae`, `obj`, `glb`). `stl`, `rvt`, `dwg`, `dxf`, `skp`
+  são **fora do MVP** e devem ser rejeitados com HTTP 415.
+- `size_bytes` ≤ `MAX_UPLOAD_MB * 1024 * 1024` (limite do MVP).
+- `content_hash` calculado no upload e revalidado quando o worker
+  lê o arquivo (defesa contra corrupção de storage).
+- Magic bytes do arquivo devem bater com `source_format` declarado
+  (ex.: IFC começa com `ISO-10303-21`; DAE é XML com `COLLADA`;
+  GLB começa com `glTF` magic; OBJ começa com `#` ou `v`).
 
----
+### ConversionJob
 
-## Validation rules
+Representa a unidade de trabalho assíncrono: a conversão do
+`ModelFile` em GLB + thumbnail.
 
-These map directly to FR-001…FR-005 and edge cases. Implemented as FluentValidation validators in `Application/Projects/Validators/`.
+| Atributo | Tipo | Restrições | Descrição |
+|---|---|---|---|
+| `id` | UUID | PK | Identificador estável. |
+| `model_file_id` | UUID | FK → `ModelFile.id`, único, não-nulo | Arquivo de origem. |
+| `status` | enum | não-nulo | `pending` \| `running` \| `ready` \| `failed`. |
+| `attempts` | int | default `0` | Contagem de tentativas de execução. |
+| `last_error` | text | opcional, populado em `failed` | Mensagem de erro do worker. |
+| `started_at` | timestamp | nullable | Quando o worker pegou a task. |
+| `finished_at` | timestamp | nullable | Quando terminou (com sucesso ou falha). |
+| `created_at` | timestamp | imutável | Quando a entidade foi criada (= quando o upload foi aceito). |
+| `glb_storage_key` | string | nullable, populado em `ready` | Chave do GLB produzido. |
+| `thumbnail_storage_key` | string | nullable, populado em `ready` | Chave do thumbnail WebP. |
+| `duration_ms` | int | nullable, populado em `ready`/`failed` | Tempo total de execução. |
 
-| Rule | Source | Failure message |
-|---|---|---|
-| `Name` is 1–200 chars after trim | FR-001 | "Project name is required (1–200 characters)." |
-| `Description` is ≤ 2000 chars | FR-001 | "Description must be 2000 characters or less." |
-| `ClientLabel` is ≤ 200 chars | FR-001 | "Client label must be 200 characters or less." |
-| Uploaded file size ≤ `MAX_IFC_MB` (env, default 100) | FR-004 | "File too large. Maximum allowed size is {N} MB." |
-| Uploaded file content starts with `ISO-10303-21;` (first line) | FR-003 | "Not a valid IFC file. The upload must be an .ifc file exported from a supported CAD tool." |
-| Uploaded file extension is `.ifc` | FR-033 | "Only .ifc files are supported in this version." |
-| `Status` transitions follow the diagram | FR-006 | "Invalid project state transition from {from} to {to}." |
-| Publish only allowed when `Status = 'ReadyToPublish'` | FR-011 | "This project is not ready to publish." |
+**Máquina de estados**:
 
----
-
-## Storage keys (MinIO)
-
-Keys are deterministic per `projectId` and per role. The `Project` row stores the key, never the raw bytes.
-
-| Concern | Bucket | Key |
-|---|---|---|
-| Original upload | `ifc-files` | `projects/{projectId}/source.ifc` |
-| Generated GLB | `glb-files` | `projects/{projectId}/model.glb` |
-| Generated thumbnail | `thumbnails` | `projects/{projectId}/thumb.png` |
-| Generated QR code | `qrcodes` | `projects/{projectId}/qr.png` |
-
-`{projectId}` is the `Project.Id` (internal Guid). The keys are not user-facing; the public URLs go through presigned GetObject with a 5–15 min TTL.
-
----
-
-## State surfaces (DTOs)
-
-Three view models consumed by the API responses. Defined in `Application/Projects/Dtos/` and `Application/Sharing/Dtos/`.
-
-### `ProjectDto` (returned by `GET /api/projects/{id}` and `GET /api/projects`)
-
-```json
-{
-  "id": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-  "name": "Living Room Sofa",
-  "description": "...",
-  "clientLabel": "Alice",
-  "status": "ready-to-publish",
-  "thumbnailUrl": "https://minio/...",
-  "ifcSizeBytes": 12345678,
-  "errorMessage": null,
-  "createdAt": "2026-06-09T12:00:00Z",
-  "updatedAt": "2026-06-09T12:01:23Z"
-}
+```
+                ┌────────┐
+                │pending │   ← estado inicial, logo após aceitação do upload
+                └───┬────┘
+                    │  worker pega a task
+                    ▼
+                ┌────────┐
+                │running │
+                └────┬───┘
+       ┌────────────┴────────────┐
+       ▼ sucesso                  ▼ falha
+   ┌────────┐                  ┌────────┐
+   │ ready  │                  │ failed │
+   └────────┘                  └────────┘
+       (terminal)               (terminal, mas retentável manualmente
+                                 via endpoint explícito)
 ```
 
-`id` is exposed only on the **authenticated** dashboard endpoints, never on public responses.
+**Validações**:
+- Transições só na direção `pending → running → {ready, failed}`.
+- Re-encoding de um `ModelFile` existente (re-upload ou retry manual)
+  cria **um novo** `ConversionJob` (imutabilidade histórica).
+- `attempts` ≤ limite configurado (evitar loop infinito em erros
+  determinísticos).
 
-### `ProjectSummaryDto` (returned by `GET /api/projects` list)
+### ShareLink
 
-Same as `ProjectDto` minus `description` (truncated) and `ifcSizeBytes` to keep list payloads light.
+Representa o link público de visualização que o owner envia ao
+cliente.
 
-### `PublicShareDto` (returned by anonymous `GET /api/share/{token}`)
+| Atributo | Tipo | Restrições | Descrição |
+|---|---|---|---|
+| `id` | UUID | PK | Identificador estável. |
+| `token` | string | único, ≥ 128 bits de entropia | Token opaco da URL pública. |
+| `project_id` | UUID | FK → `Project.id`, não-nulo | Projeto dono. |
+| `model_file_id` | UUID | FK → `ModelFile.id`, não-nulo | Versão específica do modelo compartilhado. |
+| `created_by` | UUID | FK → `User.id`, não-nulo | Quem gerou. |
+| `created_at` | timestamp | imutável | Instante de criação. |
+| `revoked_at` | timestamp | nullable | Soft-revogação. |
 
-```json
-{
-  "name": "Living Room Sofa",
-  "clientLabel": "Alice",
-  "status": "published",
-  "glbUrl": "https://minio/...presigned...",
-  "thumbnailUrl": "https://minio/...presigned..."
-}
-```
+**Validações**:
+- `token` gerado server-side com CSPRNG; nunca exposto em logs.
+- `revoked_at IS NOT NULL` bloqueia o acesso público.
+- Acesso público é `GET /share/{token}` — não exige auth; o token
+  é a credencial.
 
-**No** `id`, **no** `ownerId`, **no** `errorMessage`, **no** `createdAt` (FR-025). Only what the public viewer needs.
-
-### `PublishResultDto` (returned by `POST /api/projects/{id}/publish`)
-
-```json
-{
-  "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
-  "publicToken": "3f2e1d0c-b9a8-7654-3210-fedcba987654",
-  "publicUrl": "https://app.example.com/s/3f2e1d0c-b9a8-7654-3210-fedcba987654",
-  "qrCodeUrl": "https://minio/...presigned..."
-}
-```
+> **Fora do MVP** (registrado para clareza):
+> - `expires_at` — share link não expira. Adicionar quando for
+>   requisito explícito.
+> - `view_count` — telemetria de visualização. Adicionar quando
+>   houver requisito de analytics.
 
 ---
 
-## Migrations
+## Cardinalidades (resumo)
 
-Single initial migration `00000000000000_Initial.cs` created with:
-```bash
-dotnet ef migrations add Initial \
-  --project app/backend/Backend.csproj \
-  --startup-project app/backend/Backend.csproj
+| Origem | → | Destino | Cardinalidade | Notas |
+|---|---|---|---|---|
+| `User` | → | `Project` | 1:N | `Project.owner_id` |
+| `Project` | → | `ModelFile` | 1:N | `ModelFile.project_id` |
+| `User` | → | `ModelFile` | 1:N | `ModelFile.uploader_id` (uploader pode ser ≠ owner se houver colaboração futura; no MVP, sempre igual ao owner) |
+| `ModelFile` | → | `ConversionJob` | 1:1 (histórico) | Cada arquivo pode ter múltiplos jobs ao longo do tempo (reattempts), mas apenas o `latest ready` é considerado o "atual" |
+| `Project` | → | `ShareLink` | 1:N | Múltiplos links simultâneos permitidos |
+| `ShareLink` | → | `ModelFile` | N:1 | Um link aponta para **uma** versão do modelo |
+| `ShareLink` | → | `User` | N:1 (criador) | Auditoria |
+
+---
+
+## Invariantes
+
+1. **Um `ModelFile` é imutável após o upload.** Reprocessamento não
+   substitui o arquivo; cria um novo job.
+2. **Apenas o `owner` do `Project` pode mutar o projeto e seus
+   descendentes** (`ModelFile`, `ConversionJob`, `ShareLink`).
+3. **`ConversionJob.glb_storage_key` e `thumbnail_storage_key`
+   populados ⇔ `status == ready`**. Em `failed`, ambos são `null`.
+4. **`ShareLink` é inválido quando `revoked_at IS NOT NULL`.**
+5. **`ConversionJob` aceita reentrega** (atualização atômica de
+   `status`) — não há duas transições concorrentes; o worker faz
+   `SELECT ... FOR UPDATE` ou update condicional.
+
+---
+
+## Estados derivados (não-persistidos)
+
+- **`Project.latest_model_file`**: o `ModelFile` com `uploaded_at`
+  mais recente.
+- **`Project.latest_ready_job`**: o `ConversionJob` mais recente com
+  `status == ready` (se houver).
+- **`Project.is_viewable`**: `latest_ready_job IS NOT NULL`.
+
+Esses valores não são colunas — são derivados em queries.
+
+---
+
+## Modelo de arquivos (filesystem)
+
+Layout canônico, servido via abstração `ObjectStorage`:
+
+```
+storage/
+  originals/
+    <project_id>/
+      <model_file_id>__<sanitized_original_name>
+  converted/
+    <project_id>/
+      <model_file_id>.glb
+  thumbnails/
+    <project_id>/
+      <model_file_id>.webp
 ```
 
-The migration creates:
-- `projects` table with all columns above + the 3 indexes.
-- `share_links` table with all columns above + the 2 unique indexes.
-- The FK `share_links.ProjectId → projects.Id ON DELETE CASCADE`.
-- The FK `projects.OwnerId → "AspNetUsers"."Id"`.
+Cada `ModelFile` tem um diretório dedicado dentro de
+`<project_id>/` para que a remoção de um projeto (ou de uma versão)
+seja uma operação atômica de remoção de pasta.
 
-ASP.NET Identity schema is created by `AddIdentity` via its own migration (`00000000000001_Identity.cs`).
+---
 
-`Database.Migrate()` is called on startup. The current `EnsureCreated()` is removed.
+## Escopo do MVP (reafirmação)
+
+Estes **não** são modelados no MVP:
+- Permissões granulares (roles, ACL)
+- Comentários
+- Versionamento explícito (entidade `Version` separada; o
+  `ModelFile` carrega seu próprio histórico por timestamp)
+- BIM tree / propriedades IFC
+- Digital twin / telemetria de visualização
+- Auditoria detalhada (apenas `created_at`/`updated_at`)
+
+Esses itens não constam no modelo conceitual. Adicioná-los
+posteriormente **exige** revisão da Constituição.

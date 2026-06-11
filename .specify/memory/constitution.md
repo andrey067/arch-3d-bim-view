@@ -1,150 +1,391 @@
 <!--
   Sync Impact Report:
   ==================
-  Version change: 0.0.0 → 1.0.0 (MAJOR: first substantive constitution from template)
-  
+  Version change: 1.1.0 → 2.0.0 (MAJOR: complete stack redefinition —
+  Python/FastAPI backend replaces ASP.NET Core; project repositioned
+  from "BIM" to general 3D viewer; vertical-slice feature layout;
+  async processing, local-disk storage, GLB-centric pipeline)
+
   Modified principles:
-  - [PRINCIPLE_1_NAME] → I. Clean Code & MVP Pragmatism
-  - [PRINCIPLE_2_NAME] → II. Meaningful Naming & Structure
-  - [PRINCIPLE_3_NAME] → III. Small Units & Single Responsibility
-  - [PRINCIPLE_4_NAME] → IV. Tests Mirror Structure (Backend/Frontend Separation)
-  - [PRINCIPLE_5_NAME] → V. Self-Documenting Code & Minimal Comments
-  
+  - I. Clean Code & MVP Pragmatism → 1. Simplicidade
+  - II. Meaningful Naming & Structure → absorbed into 1, 2, 5
+  - III. Small Units & Single Responsibility → absorbed into 1
+  - IV. Tests Mirror Structure (Backend/Frontend Separation) → 2. Vertical Slice + 9. Testabilidade
+  - V. Self-Documenting Code & Minimal Comments → absorbed into 1, 10
+  - Route Boundary: Admin vs. Public Share → removed (replaced by
+    general 6. Visualização guidance; no admin/public route split
+    codified in this version)
+
   Added sections:
-  - Section 2: Project Structure & Organization Standards
-  - Section 3: Development Workflow & Quality Gates
-  - Governance section with amendment/versioning rules
-  
-  Removed sections: (none)
-  
+  - Project name: App 3D Viewer (replaces Arch3DAR framing)
+  - Objective: explicit non-BIM positioning; non-goals stated
+  - 2. Vertical Slice — features/ layout as the canonical structure
+  - 3. Backend Python (FastAPI, Pydantic v2, SQLAlchemy 2, Alembic,
+    PostgreSQL; full typing)
+  - 4. Conversão de Arquivos — Blender Headless, IfcOpenShell, Trimesh,
+    Open3D, pygltflib; materials/textures/UVs over BIM metadata
+  - 5. Frontend — React + TypeScript + Vite + TanStack Query +
+    React Router; strict TS, no plain JS
+  - 6. Visualização — GLB as canonical internal format; model-viewer
+    and Three.js preferred
+  - 7. Armazenamento — local disk for MVP; no MinIO/S3; abstraction
+    for future migration
+  - 8. Processamento Assíncrono — Celery + Redis (or equivalent);
+    no blocking HTTP conversions
+  - 9. Testabilidade — every feature requires unit tests and
+    integration tests when applicable; nothing done without tests
+  - 10. Proibição de Assunções — never invent requirements; STOP
+    and ask when unclear
+  - 11. Critério de Conclusão — code + tests + executed + validated
+  - 12. MVP — explicit in-scope set; anything else is future work
+
+  Removed sections:
+  - "Route Boundary: Admin vs. Public Share" (no longer applicable
+    to the new product framing; can be re-added in a future amendment
+    if a public-share route is reintroduced)
+  - References to ASP.NET Core, dotnet format, IFC/BIM framing
+  - `app/tests/{backend,frontend}/` mirrored test layout (replaced
+    by feature-local `tests/` in the vertical-slice structure)
+
   Templates requiring updates:
-  - .specify/templates/constitution-template.md (✅ not user-facing, template preserved)
-  - .specify/templates/plan-template.md (✅ structure examples align, no changes needed)
-  - .specify/templates/spec-template.md (✅ no constitution-specific constraints)
-  - .specify/templates/tasks-template.md (✅ path conventions mention frontend/backend — already aligned)
-  - .specify/templates/checklist-template.md (✅ generic, no changes needed)
-  
-  Follow-up TODOs: (none)
+  - .specify/templates/plan-template.md (⚠ pending — references to
+    backend/frontend separation and "Constitution Check" wording
+    should be reviewed against the new principles)
+  - .specify/templates/spec-template.md (⚠ pending — review scope
+    and requirements alignment with the new MVP scope statement)
+  - .specify/templates/tasks-template.md (⚠ pending — task paths
+    should reflect the new features/ layout)
+  - .specify/templates/checklist-template.md (✅ generic, no change)
+  - .specify/templates/constitution-template.md (✅ not user-facing,
+    template preserved)
+  - README.md / docs/quickstart.md (⚠ pending — references to
+    ASP.NET Core, IFC/BIM framing, and the previous structure need
+    to be updated; OUT OF SCOPE for this amendment per user
+    instruction to modify only the constitution)
+
+  Follow-up TODOs:
+  - TODO(CONSTITUTION_MIGRATION): The current implementation under
+    `app/backend/` is ASP.NET Core 9 (C#) and the active plan/scope
+    in `specs/001-ifc-mvp-platform/` still references the IFC MVP
+    framing. This constitution declares the target stack; an
+    explicit migration plan is required before code is rewritten
+    in Python/FastAPI. Do not silently rewrite production code as
+    a side effect of this amendment.
+  - TODO(STORAGE_ABSTRACTION): The local-disk storage rule requires
+    a storage interface so that future migration to object storage
+    is feasible without rewriting call sites.
 -->
 
-# Arch3DAR Constitution
+# App 3D Viewer Constitution
 
-## Core Principles
+## Nome
 
-### I. Clean Code & MVP Pragmatism
+App 3D Viewer
 
-Code MUST be clean, simple, and sufficient. Every abstraction, class, or
-dependency MUST justify its existence — no over-engineering for hypothetical
-future needs. YAGNI (You Ain't Gonna Need It) applies strictly. When in doubt,
-prefer the simpler solution that satisfies current requirements.
+## Objetivo
 
-**Rationale**: This is an MVP. Premature abstraction and speculative
-generality are the primary sources of unnecessary complexity. Clean code is
-not about more layers — it is about clarity at the right level of
-abstraction.
+O App 3D Viewer é uma plataforma web para compartilhamento e visualização
+de modelos 3D.
 
-### II. Meaningful Naming & Structure
+O usuário realiza upload de arquivos de modelagem 3D, o sistema converte para
+GLB quando necessário e gera um link público para visualização em navegador e
+Realidade Aumentada.
 
-Names MUST reveal intent. Functions, classes, variables, files, and routes
-MUST have unambiguous, pronounceable names that communicate purpose without
-requiring a comment. Avoid abbreviations (except universally accepted ones
-like `id`, `url`, `http`). Project structure MUST follow a consistent,
-predictable layout so that any file can be located by its logical role.
+O foco principal é arquitetura, interiores, móveis planejados e apresentação
+comercial de projetos.
 
-### III. Small Units & Single Responsibility
+O sistema **NÃO** é um software BIM.
 
-Every function, method, or component MUST do one thing and one thing only.
-If a function exceeds 20–30 lines or accumulates multiple responsibilities,
-split it. Components (React) MUST have a single responsibility — extract
-child components when a parent grows beyond 100–150 lines. No god objects,
-no monster functions.
+O sistema **NÃO** tem como objetivo competir com Revit, Navisworks ou
+Solibri.
 
-### IV. Tests Mirror Structure (Backend/Frontend Separation)
+O objetivo é visualização e compartilhamento simples.
 
-Tests MUST be organized to mirror source code structure. All tests live under
-`app/tests/` with two top-level domains:
-- **`app/tests/backend/`** — Tests for ASP.NET Core backend (`app/backend/`)
-- **`app/tests/frontend/`** — Tests for React frontend (`app/frontend/`)
+---
 
-Within each domain, subdivide by test type as needed (unit, integration,
-contract). Each test MUST be independently runnable. Tests are not optional
-— they are the specification of correct behavior.
+# PRINCÍPIOS FUNDAMENTAIS
 
-**Rationale**: Separating backend and frontend tests prevents framework
-cross-contamination, makes CI faster (parallel execution), and keeps test
-concerns focused. This is an MVP — the test layout must be simple,
-scannable, and maintainable.
+## 1. Simplicidade
 
-### V. Self-Documenting Code & Minimal Comments
+Sempre escolher a solução mais simples que atenda o requisito.
 
-Code SHOULD be self-documenting. Comments MUST explain WHY, not WHAT or HOW
-— those should be evident from clean code. Do NOT write comments that parrot
-the code. Do NOT leave commented-out code — delete it. If code is unclear
-enough to need a "what" comment, refactor it instead.
+Evitar:
 
-## Project Structure & Organization Standards
+- DDD complexo
+- CQRS desnecessário
+- Event Sourcing
+- Arquiteturas excessivamente sofisticadas
+- Camadas redundantes
 
-The repository follows a web-application layout:
+**Rationale**: Complexidade só se justifica quando o requisito atual
+exige. MVP não comporta abstrações especulativas.
+
+## 2. Vertical Slice
+
+A organização do backend deve ser por funcionalidade.
+
+Estrutura preferencial:
 
 ```
-app/
-├── backend/           # ASP.NET Core 9 API
-├── frontend/          # React + Vite BIM viewer
-├── converter/         # IFC-to-GLB conversion worker
-├── tests/
-│   ├── backend/       # Backend tests (unit, integration, contract)
-│   └── frontend/      # Frontend tests (unit, integration, e2e)
-├── nginx/             # Reverse proxy configuration
-├── docker-compose.yml
-└── .env
+features/
+    upload_model/
+    convert_model/
+    generate_thumbnail/
+    share_model/
+    projects/
+    authentication/
 ```
 
-- All source code resides under `app/`. No source files outside `app/`.
-- Tests reside exclusively under `app/tests/`, mirroring the source domain.
-- Infrastructure config (Docker, nginx, CI) belongs in the root or `app/`
-  root — do not scatter configs inside `backend/` or `frontend/`.
-- Environment templates go in `.env.example` at the applicable level.
+Cada feature deve conter seus próprios:
 
-## Development Workflow & Quality Gates
+- endpoints
+- schemas
+- services
+- tests
 
-1. **Test-First Mindset**: Write a failing test before implementing any
-   feature or fix. This is strongly recommended for all changes.
-2. **All Tests MUST Pass** before merging into the main branch.
-3. **Linting MUST Pass**: Frontend code MUST pass ESLint. Backend code MUST
-   pass `dotnet format` or equivalent.
-4. **No Dead Code**: Unused imports, commented-out code, and unreachable
-   branches MUST be removed before commit.
-5. **Each PR MUST Include Tests**: A PR that introduces new functionality
-   without corresponding tests will be rejected.
-6. **Complexity Requires Justification**: If the Constitution Check in the
-   plan identifies a complexity violation, the PR MUST include a documented
-   justification explaining why a simpler approach is insufficient.
+Evitar pastas globais de `services/` e `repositories/` quando possível.
+
+**Rationale**: Agrupar por feature mantém acoplamento e coesão
+próximos; reduz o custo cognitivo de localizar uma responsabilidade
+e torna o descarte de uma feature atômico.
+
+## 3. Backend Python
+
+O backend utiliza:
+
+- **FastAPI**
+- **Pydantic v2**
+- **SQLAlchemy 2**
+- **Alembic**
+- **PostgreSQL**
+
+Todo código deve ser totalmente tipado.
+
+Toda função pública deve possuir type hints.
+
+**Rationale**: Stack homogênea, com validação em borda (Pydantic) e
+migrações versionadas (Alembic) alinhadas ao princípio de simplicidade.
+
+## 4. Conversão de Arquivos
+
+A conversão é uma capacidade central do produto.
+
+Devem ser priorizadas bibliotecas Python para processamento 3D.
+
+Tecnologias preferenciais:
+
+- **Blender Headless**
+- **IfcOpenShell**
+- **Trimesh**
+- **Open3D**
+- **pygltflib**
+
+Sempre priorizar preservação de:
+
+- materiais
+- texturas
+- UV mapping
+
+sobre metadados BIM.
+
+**Rationale**: O produto vende apresentação visual, não interoperabilidade
+BIM. Materiais e texturas corretos são o que o usuário percebe; metadados
+BIM são dispensáveis fora do nicho AEC pesado.
+
+## 5. Frontend
+
+Stack oficial:
+
+- **React**
+- **TypeScript**
+- **Vite**
+- **TanStack Query**
+- **React Router**
+
+Todo código frontend deve ser TypeScript estrito.
+
+Não utilizar JavaScript puro.
+
+**Rationale**: Type safety na borda do cliente elimina classes inteiras de
+bugs e mantém contratos com a API explícitos.
+
+## 6. Visualização
+
+Formato interno padrão:
+
+- **GLB**
+
+Todo fluxo do sistema deve convergir para GLB.
+
+Visualização preferencial:
+
+- **`<model-viewer>`** (Google)
+- **Three.js** quando necessário
+
+**Rationale**: GLB é binário, único arquivo, amplamente suportado por
+`<model-viewer>` e pela Web. Centralizar no GLB simplifica o pipeline
+de cache, CDN e viewer.
+
+## 7. Armazenamento
+
+Durante o MVP:
+
+- armazenamento **local em disco**.
+
+Não utilizar MinIO.
+
+Não utilizar S3.
+
+A abstração de storage deve permitir futura migração.
+
+**Rationale**: Para um MVP, o custo de operar um object store excede o
+ganho. A obrigatoriedade de uma abstração evita que o "MVP local" vire
+uma reescrita quando o tráfego justificar object storage.
+
+## 8. Processamento Assíncrono
+
+Conversões **não devem bloquear** requisições HTTP.
+
+Utilizar fila de processamento.
+
+Tecnologias preferenciais:
+
+- **Celery + Redis**
+
+ou equivalente simples.
+
+**Rationale**: Conversão 3D é cara em CPU e tempo. Bloquear a request
+HTTP degrada UX e acopla o front a limites do worker. Uma fila desacopla
+aceitação de processamento e permite retries e backpressure naturais.
+
+## 9. Testabilidade
+
+Toda feature deve possuir:
+
+- testes unitários
+- testes de integração quando aplicável
+
+**Não marcar tarefas como concluídas sem testes.**
+
+**Rationale**: Sem testes, a stack de conversão 3D — que depende de
+Blender, IFC, geometria — regride silenciosamente a cada mudança. Testes
+são a especificação executável do comportamento.
+
+## 10. Proibição de Assunções
+
+- Nunca inventar requisitos.
+- Nunca criar funcionalidades não especificadas.
+- Nunca inferir regras de negócio não documentadas.
+
+Quando houver dúvida: **PARAR** e solicitar esclarecimento.
+
+**Rationale**: Um agente que infere requisitos pode introduzir um
+produto diferente do que o usuário pediu. Em MVP, escopo não-declarado
+é dívida imediata.
+
+## 11. Critério de Conclusão
+
+Uma tarefa somente pode ser considerada concluída quando **todos** os
+itens abaixo forem satisfeitos:
+
+- código implementado
+- testes implementados
+- testes executados
+- resultado validado
+
+A ausência de qualquer item **impede** marcar como concluído.
+
+**Rationale**: "Terminei" sem testes executados é uma asserção sem
+evidência. Em um pipeline de conversão 3D, "compilou" não significa
+"funciona" — geometria, materiais e UVs só se provam com testes
+executados.
+
+## 12. MVP
+
+Escopo inicial:
+
+- upload de modelos
+- conversão para GLB
+- geração de thumbnail
+- geração de link público
+- visualização 3D
+- visualização AR
+
+Qualquer funcionalidade fora desse escopo deve ser tratada como futura
+expansão.
+
+**Rationale**: Escopo explícito protege o time da tentação de
+"já que estou aqui, faço também…". Cada item fora do MVP é uma
+decisão de roadmap, não uma decisão de implementação.
+
+---
 
 ## Governance
 
-This Constitution is the governing document for all development practices,
-code style, and project structure decisions. It supersedes informal habits
-and personal preferences.
+Esta Constituição é o documento soberano para todas as decisões de
+arquitetura, stack, estrutura de código e prática de desenvolvimento do
+projeto. Ela se sobrepõe a hábitos informais e preferências pessoais.
 
 ### Amendment Procedure
 
-1. Propose a change to `.specify/memory/constitution.md` via a Pull Request.
-2. Document the rationale, impact on existing code, and migration path.
-3. At least one approving review is required.
-4. Update `LAST_AMENDED_DATE` and increment `CONSTITUTION_VERSION` per the
-   versioning policy below.
+1. Propor mudança em `.specify/memory/constitution.md` via Pull Request.
+2. Documentar rationale, impacto no código existente e caminho de
+   migração (se aplicável).
+3. Ao menos uma aprovação é necessária.
+4. Atualizar `LAST_AMENDED_DATE` e incrementar `CONSTITUTION_VERSION`
+   conforme a política de versionamento abaixo.
 
 ### Versioning Policy
 
-- **MAJOR** (x.0.0): Backward-incompatible principle removals or
-  redefinitions.
-- **MINOR** (0.x.0): New principle or materially expanded guidance.
-- **PATCH** (0.0.x): Clarifications, wording fixes, non-semantic refinements.
+- **MAJOR** (x.0.0): remoções ou redefinições incompatíveis de
+  princípios; mudanças de stack; reescopo de produto.
+- **MINOR** (0.x.0): novo princípio adicionado; orientação
+  materialmente expandida.
+- **PATCH** (0.0.x): clarificações, correções de wording,
+  refinamentos não-semânticos.
 
 ### Compliance Review
 
-Every `/speckit-plan` execution MUST include a Constitution Check step.
-Violations MUST be documented in the Complexity Tracking section of the plan.
-Persistent or severe violations MAY block implementation until resolved.
+Toda execução de `/speckit-plan` deve incluir uma etapa de Constitution
+Check. Violações devem ser documentadas na seção de Complexity Tracking
+do plano. Violações persistentes ou severas podem bloquear a
+implementação até resolução.
 
-**Version**: 1.0.0 | **Ratified**: 2026-06-09 | **Last Amended**: 2026-06-09
+---
+
+**Version**: 2.0.0 | **Ratified**: 2026-06-09 | **Last Amended**: 2026-06-11
+
+### 2.0.0 Amendment Notes
+
+- Reposicionamento do produto: de "Arch3DAR — IFC/BIM MVP" para
+  **App 3D Viewer** — visualização e compartilhamento 3D genérico,
+  sem pretensão de ser software BIM.
+- Stack do backend **migrada de ASP.NET Core 9 (C#) para Python**
+  (FastAPI + Pydantic v2 + SQLAlchemy 2 + Alembic + PostgreSQL).
+- Frontend mantido (React + TypeScript), com stack explicitada:
+  Vite + TanStack Query + React Router.
+- Estrutura de código backend migrada de separação
+  `controllers/services/repositories/` para **vertical slice por
+  feature** (`features/upload_model/`, `features/convert_model/`,
+  …).
+- Conversão 3D declarada como **capacidade central**, com stack
+  preferencial: Blender Headless, IfcOpenShell, Trimesh, Open3D,
+  pygltflib. Preservação de materiais/texturas/UVs sobre metadados BIM.
+- Formato interno canônico: **GLB**. Viewer preferencial: `<model-viewer>`,
+  com Three.js como alternativa.
+- Armazenamento MVP: **disco local**, com abstração obrigatória para
+  permitir futura migração para object storage. Proibição explícita
+  de MinIO/S3 neste momento.
+- Conversões são **assíncronas** via Celery + Redis (ou equivalente).
+- Adicionados princípios explícitos: **Proibição de Assunções** e
+  **Critério de Conclusão** (código + testes + execução + validação).
+- **MVP** explicitado em lista fechada; qualquer item fora dela é
+  expansão futura.
+- Removida a seção "Route Boundary: Admin vs. Public Share" —
+  aplicável ao framing anterior; pode ser reintroduzida por amendment
+  futuro se a rota pública de share voltar a ser um recorte relevante.
+- **Atenção**: o código atual do repositório (`app/backend/` em
+  ASP.NET Core 9) e o escopo ativo em `specs/001-ifc-mvp-platform/`
+  ainda refletem a versão 1.x desta constituição. A 2.0.0 declara o
+  **alvo arquitetural**; uma migração de código deve ser planejada
+  antes de qualquer reescrita — não é efeito colateral desta alteração.

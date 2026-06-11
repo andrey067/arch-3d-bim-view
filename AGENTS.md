@@ -3,15 +3,16 @@ For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan at:
 `specs/001-ifc-mvp-platform/plan.md`
 
-Supporting artifacts (read in this order when implementing a task):
-- `specs/001-ifc-mvp-platform/spec.md` — WHAT and WHY (33 functional requirements, 5 user stories, success criteria)
-- `specs/001-ifc-mvp-platform/research.md` — 10 technology decisions, each with rationale and alternatives
-- `specs/001-ifc-mvp-platform/data-model.md` — entities, validation rules, state machine
-- `specs/001-ifc-mvp-platform/contracts/openapi.md` — HTTP API contract (frontend + converter sidecar)
-- `specs/001-ifc-mvp-platform/quickstart.md` — end-to-end validation scenarios
-- `specs/001-ifc-mvp-platform/adr-001-frontend-separation.md` — architectural decisions on frontend separation of concerns
+**Active scope (2026-06-11)**: App 3D Viewer MVP — Python 3.13+/FastAPI backend with vertical-slice features (auth, projects, models, conversion, sharing, viewer), Celery+Redis async processing, local disk storage with `ObjectStorage` abstraction, GLB as canonical internal format (Blender Headless + IfcOpenShell — **Trimesh/Open3D/pygltflib explicitly out of MVP**; reintroduzir só com FR concreto), React 18+/TypeScript strict + Vite + TanStack Query + React Router, `<model-viewer>` for 3D/AR. JWT auth próprio (no Clerk/Auth0/Firebase). Suporta IFC, DAE, OBJ, GLB. **STL, RVT, DWG, DXF, SKP rejeitados** (STL fora por não preservar materiais). **Sem `view_count`/`metadata`/`expires_at` no MVP.** Monorepo: `apps/{frontend,backend}/`, `infra/docker/`, `docs/`, `storage/`. See plan.md.
 
-Active feature: `001-ifc-mvp-platform` (Arch3DAR — IFC-to-AR 3D Sharing MVP).
-Repository layout: `app/{backend,frontend,converter,tests}/` (do not change).
-Constitution: `.specify/memory/constitution.md` (v1.0.0 — MVP-pragmatism, YAGNI, single responsibility).
+Supporting artifacts (read in this order when implementing a task):
+- `specs/001-ifc-mvp-platform/spec.md` — product vision (App 3D Viewer, not BIM)
+- `specs/001-ifc-mvp-platform/research.md` — R-1…R-21 (stack, conversion, auth, storage, async)
+- `specs/001-ifc-mvp-platform/data-model.md` — User/Project/ModelFile/ConversionJob/ShareLink
+- `specs/001-ifc-mvp-platform/contracts/openapi.md` — HTTP API + Celery task contract
+- `specs/001-ifc-mvp-platform/quickstart.md` — end-to-end validation scenarios
+
+Active feature: `001-ifc-mvp-platform` (App 3D Viewer MVP).
+Repository layout: monorepo `apps/{frontend,backend}/` + `infra/docker/` + `docs/` + `storage/`. Backend uses vertical-slice `features/<name>/{router,schemas,service,persistence,models,tests}`. Conversion worker lives at `apps/backend/app/conversion/`.
+Constitution: `.specify/memory/constitution.md` v2.0.0 — simplicity, vertical slice, Python backend, GLB-centric, local disk + abstraction, Celery+Redis, full testability, no assumptions, MVP closed scope.
 <!-- SPECKIT END -->

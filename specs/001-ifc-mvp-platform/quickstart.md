@@ -1,257 +1,429 @@
-# Quickstart Validation: Arch3DAR MVP
+# Quickstart — App 3D Viewer (MVP)
 
-**Phase**: 1
-**Branch**: `001-ifc-mvp-platform`
-**Date**: 2026-06-09
-**Spec**: `specs/001-ifc-mvp-platform/spec.md`
+**Feature**: `001-ifc-mvp-platform` (App 3D Viewer MVP)
+**Status**: Guia de validação end-to-end. Cobre o MVP completo —
+autenticação, upload, conversão assíncrona, thumbnail,
+compartilhamento, visualização web e AR.
 
-> A runnable, end-to-end smoke test for the MVP. Each scenario maps to a spec acceptance criterion (US-1 AC-1 through US-2 AC-5). No implementation code is reproduced here — this is the *executable* contract that `/speckit.implement` will deliver.
+> Este quickstart descreve **como validar** o sistema rodando
+> ponta-a-ponta, sem entrar em implementação de código. Cada
+> cenário lista pré-requisitos, comandos (quando aplicável),
+> e o resultado esperado. Detalhes de endpoints e contratos
+> estão em [contracts/openapi.md](./contracts/openapi.md).
 
 ---
 
-## Prerequisites
+## 0. Pré-requisitos
 
-| Tool | Min version | Why |
+### 0.1 Infraestrutura
+
+- Docker Engine 24+ e Docker Compose v2.
+- 8 GB RAM livre (Blender headless + IfcOpenShell exigem).
+- Portas locais liberadas: 5432 (Postgres), 6379 (Redis), 8000
+  (API), 5173 (frontend dev) ou 8080 (nginx prod).
+
+### 0.2 Conta de serviço
+
+- Subir a stack: `docker compose up -d`.
+- A API deve estar respondendo em `http://localhost:8000/api/v1/health`
+  com `{"status": "ok"}`.
+
+### 0.3 Cliente de teste
+
+- Navegador moderno (Chrome/Safari/Firefox atual) em desktop.
+- Smartphone Android (Chrome + ARCore) — opcional para teste de AR.
+- iPhone (Safari) — opcional para teste de AR.
+
+### 0.4 Arquivos de modelo de teste
+
+Prepare ao menos:
+- 1 IFC pequeno (≤ 5 MB) — qualquer projeto público com licença
+  permissiva serve.
+- 1 DAE exportado do SketchUp (ou similar).
+- 1 OBJ com texturas referenciadas.
+- 1 GLB válido (caso GLB-entrada).
+
+> Atenção: o MVP rejeita STL, SKP, RVT, DWG, DXF com HTTP 415 e
+> mensagem clara. Use-os apenas para validar a rejeição.
+> STL é mesh pura sem materiais — não atende o objetivo do
+> produto (arquitetura, interiores, móveis planejados).
+
+---
+
+## 1. Cenário 1 — Autenticação
+
+**Objetivo**: validar registro, login, refresh e logout com JWT
+próprio.
+
+### 1.1 Registrar conta
+
+**Comando** (curl):
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/register \
+  -H "Content-Type: application/json" \
+  -d '{"email":"owner@example.com","password":"correct-horse-battery","display_name":"Owner"}'
+```
+
+**Esperado**:
+- HTTP `201 Created`.
+- Response com `id`, `email`, `display_name`, `created_at`.
+- Sem `password_hash` no payload.
+
+### 1.2 Login
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"email":"owner@example.com","password":"correct-horse-battery"}'
+```
+
+**Esperado**:
+- HTTP `200 OK`.
+- `access_token` (JWT) e `refresh_token` (opaco).
+- `token_type: "Bearer"`, `expires_in: 900`.
+
+### 1.3 Refresh
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<refresh-from-1.2>"}'
+```
+
+**Esperado**:
+- HTTP `200`.
+- Novo `access_token` + novo `refresh_token` (rotação).
+- O `refresh_token` antigo é invalidado.
+
+### 1.4 Logout
+
+```bash
+curl -X POST http://localhost:8000/api/v1/auth/logout \
+  -H "Content-Type: application/json" \
+  -d '{"refresh_token":"<refresh-from-1.3>"}'
+```
+
+**Esperado**: HTTP `204`. Subsequente `refresh` com esse token
+retorna `401`.
+
+### 1.5 Edge cases a validar
+
+- Senha fraca (< 8 chars) → `400`.
+- Email duplicado no `register` → `409`.
+- `refresh` com token revogado → `401`.
+- 11 logins errados em 1 minuto → `429` (rate limit).
+
+---
+
+## 2. Cenário 2 — Projeto + Upload IFC
+
+**Objetivo**: criar projeto, fazer upload de IFC, observar
+conversão assíncrona, ver artefatos prontos.
+
+### 2.1 Criar projeto
+
+```bash
+curl -X POST http://localhost:8000/api/v1/projects \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"name":"Casa Cliente A","description":"Reforma sala"}'
+```
+
+**Esperado**: HTTP `201`, payload do projeto com `id`.
+
+### 2.2 Upload IFC
+
+```bash
+curl -X POST http://localhost:8000/api/v1/projects/<project_id>/files \
+  -H "Authorization: Bearer <access_token>" \
+  -F "file=@/path/to/casa.ifc"
+```
+
+**Esperado**:
+- HTTP `202 Accepted`.
+- `model_file_id`, `conversion_job_id`, `status: "pending"`.
+
+### 2.3 Polling de status
+
+```bash
+curl http://localhost:8000/api/v1/jobs/<conversion_job_id> \
+  -H "Authorization: Bearer <access_token>"
+```
+
+**Esperado**:
+- Inicialmente: `status: "pending"` ou `running`.
+- Após ≤ 5 min: `status: "ready"`, com `glb_url` e
+  `thumbnail_url` populados.
+- Em caso de falha: `status: "failed"`, `last_error` populado.
+
+### 2.4 Edge cases a validar
+
+- Upload de arquivo > `MAX_UPLOAD_MB` → `413`.
+- Upload de `.stl`, `.skp`, `.rvt`, `.dwg`, `.dxf` → `415` com
+  mensagem clara de que o formato **não é suportado no MVP**.
+- Upload de arquivo com magic bytes inválido (renomear `.exe`
+  para `.ifc`) → `415`.
+
+---
+
+## 3. Cenário 3 — DAE/OBJ/GLB
+
+**Objetivo**: validar pipelines alternativos.
+
+Repetir a Seção 2 substituindo o arquivo de entrada por:
+
+### 3.1 DAE (do SketchUp)
+- Esperado: conversão via Blender headless → GLB com
+  materiais/UVs preservados; thumbnail WebP renderizado.
+
+### 3.2 OBJ
+- Esperado: idem 3.1.
+
+### 3.3 GLB (já no formato)
+- Esperado: pipeline curto — Blender headless normaliza (eixos,
+  escala) e gera thumbnail; o GLB é o próprio canônico.
+
+---
+
+## 4. Cenário 4 — Compartilhamento
+
+**Objetivo**: criar link público, acessar sem autenticação,
+reivindicar revogação.
+
+### 4.1 Criar share link
+
+```bash
+curl -X POST http://localhost:8000/api/v1/projects/<project_id>/shares \
+  -H "Authorization: Bearer <access_token>" \
+  -H "Content-Type: application/json" \
+  -d '{"model_file_id":"<file_id>"}'
+```
+
+**Esperado**: HTTP `201` com `url: "/s/<token>"`.
+
+### 4.2 Acessar página pública
+
+Abrir `http://localhost:8000/s/<token>` no navegador (sem
+autenticação).
+
+**Esperado**:
+- HTML da SPA renderiza.
+- Thumbnail WebP carrega como poster.
+- `<model-viewer>` carrega o GLB.
+- Controles de orbit, zoom, fullscreen, auto-rotate funcionam.
+
+### 4.3 Inspecionar manifest
+
+```bash
+curl http://localhost:8000/s/<token>/manifest
+```
+
+**Esperado**: JSON com `glb_url`, `thumbnail_url`, `project_name`,
+`uploader_display_name`. (Sem campo `metadata` no MVP — analytics
+de geometria é expansão futura.)
+
+### 4.4 Validar assets binários
+
+```bash
+curl -I http://localhost:8000/s/<token>/model.glb
+curl -I http://localhost:8000/s/<token>/thumbnail.webp
+```
+
+**Esperado**:
+- `model.glb` → `Content-Type: model/gltf-binary`, `Accept-Ranges: bytes`.
+- `thumbnail.webp` → `Content-Type: image/webp`.
+
+### 4.5 Revogar share link
+
+```bash
+curl -X POST http://localhost:8000/api/v1/shares/<token>/revoke \
+  -H "Authorization: Bearer <access_token>"
+```
+
+**Esperado**: HTTP `204`. Subsequente `GET /s/<token>/manifest`
+retorna `404` ou `410`.
+
+---
+
+## 5. Cenário 5 — Realidade Aumentada
+
+**Objetivo**: validar AR Android (Scene Viewer) e iOS (Quick Look).
+
+### 5.1 AR Android (Scene Viewer)
+
+Pré-requisito: dispositivo Android com ARCore + Google Play
+Services for AR instalado.
+
+1. Abrir `https://<host>/s/<token>` no Chrome Android.
+2. Tocar no botão AR (badge nativo do `<model-viewer>`).
+3. Posicionar o modelo no plano detectado.
+4. Tirar foto da cena com o modelo sobreposto.
+
+**Esperado**:
+- Cena renderiza com materiais e texturas do GLB.
+- Escala coerente com o `meters` declarado no GLB.
+
+### 5.2 AR iOS (Quick Look)
+
+Pré-requisito: iPhone com iOS 13+ e Safari.
+
+> **Nota MVP**: a geração de USDZ para Quick Look a partir do
+> GLB é uma extensão de share/viewer. No MVP, a abordagem
+> mais simples é o `<model-viewer>` consumir o GLB diretamente
+> e gerar um USDZ on-the-fly ou delegar a um serviço dedicado
+> em uma fase de tasks dedicada. Este quickstart registra o
+> **resultado esperado** (Quick Look funciona), mas a
+> implementação concreta de USDZ pode variar e é deferida
+> para tasks.
+
+1. Abrir a URL pública do share no Safari iOS.
+2. Tocar no botão AR.
+3. **Cenário A** (com USDZ): Quick Look nativo abre; o modelo
+   é renderizado em AR.
+4. **Cenário B** (sem USDZ no MVP): o `<model-viewer>` mostra
+   um fallback "AR não disponível" no iOS — isso é aceitável
+   para o MVP inicial; o refinamento é responsabilidade de
+   tasks futuras.
+
+**Esperado (mínimo MVP)**: web viewer funciona em iOS Safari.
+**Esperado (target)**: AR iOS via Quick Look.
+
+### 5.3 Edge cases a validar
+
+- GLB sem `meters` definido → a escala pode parecer errada em
+  AR; documentar como limitação.
+- Modelo com muitos triângulos (> 1M) → pode falhar em
+  dispositivos modestos; documentar.
+- HTTPS obrigatório para AR — em localhost o AR não vai
+  funcionar; testar via tunnel (ngrok, Caddy) ou deploy em
+  staging com TLS válido.
+
+---
+
+## 6. Cenário 6 — Re-upload e Reprocessamento
+
+**Objetivo**: validar que re-uploads criam novos ModelFiles e
+novos Jobs, sem perder o histórico.
+
+1. No mesmo projeto, fazer upload de uma nova versão do mesmo
+   modelo (ex.: `casa-v2.ifc`).
+2. Verificar que existe um novo `ModelFile` (com novo `id`).
+3. Verificar que existe um novo `ConversionJob` (com novo `id`).
+4. `GET /projects/<id>` → lista contém ambos os `ModelFile`s.
+5. `ShareLink`s antigos continuam apontando para `ModelFile` v1.
+6. Criar novo `ShareLink` apontando para v2.
+
+**Esperado**:
+- Histórico preservado.
+- Links antigos continuam funcionando.
+- Cada versão tem seu próprio GLB e thumbnail.
+
+---
+
+## 7. Cenário 7 — Edge cases transversais
+
+### 7.1 Autenticação
+
+- Acessar `/api/v1/projects` sem token → `401`.
+- Token expirado (esperar 15 min) → `401` com mensagem de
+  expiração.
+
+### 7.2 Permissões
+
+- Owner A cria projeto; Owner B tenta `GET /projects/<id>` do A
+  → `404` (não revela existência).
+
+### 7.3 Resiliência
+
+- Worker Celery derrubado durante conversão → `GET /jobs/<id>`
+  mostra `pending` indefinidamente; ao subir o worker, o job
+  entra em `running` (Celery retoma).
+- Disco cheio durante conversão → `failed` com `last_error`
+  contendo mensagem do sistema operacional.
+
+### 7.4 Rate limit
+
+- 11 uploads em 1 minuto → `429` no 11º.
+
+---
+
+## 8. Critérios de aceitação resumidos (MVP)
+
+| ID | Critério | Cenário |
 |---|---|---|
-| Docker + Docker Compose | 24+ | All five services (postgres, minio, backend, frontend, converter) run in containers. |
-| `curl` | any | Hit the API. |
-| A modern browser | Chrome 100+ or Safari 15+ | Verify the `<model-viewer>` rendering. |
-| A small `.ifc` test file | ~200 KB | Any IFC2x3 or IFC4 file works. A representative sample is checked into `app/tests/Integration/Fixtures/sample.ifc` for the integration tests. |
-
-No local SDK install required — the only thing you run by hand is `docker compose up`.
-
----
-
-## 0. Boot the stack
-
-```bash
-git clone https://github.com/andrey067/arch-3d-bim-view
-cd arch-3d-bim-view
-cp app/.env.example app/.env
-docker compose -f app/docker-compose.yml up -d
-docker compose -f app/docker-compose.yml ps
-```
-
-Wait until all five services are `healthy` (`backend`, `frontend`, `converter`, `minio`, `postgres`). Then:
-
-```bash
-# Apply EF migrations on first boot
-docker compose -f app/docker-compose.yml exec backend \
-  dotnet ef database update
-```
-
-Open `http://localhost:3000` — the React app should be live.
+| AC-1 | Usuário pode se registrar, logar, refresh, logout. | 1 |
+| AC-2 | Owner pode criar projeto. | 2.1 |
+| AC-3 | Upload de IFC retorna 202 com job ID. | 2.2 |
+| AC-4 | Job transita `pending → running → ready`. | 2.3 |
+| AC-5 | GLB e thumbnail WebP são persistidos em `storage/`. | 2.3 |
+| AC-6 | Upload rejeita STL/SKP/RVT/DWG/DXF com `415`. | 2.4 |
+| AC-7 | DAE/OBJ/GLB são convertidos via pipelines correspondentes. | 3 |
+| AC-8 | Share link é gerado e acessível sem auth. | 4.1, 4.2 |
+| AC-9 | Endpoint público serve GLB com `Content-Type` e `Range` corretos. | 4.4 |
+| AC-10 | Revogação invalida o share link. | 4.5 |
+| AC-11 | AR Android (Scene Viewer) renderiza o modelo. | 5.1 |
+| AC-12 | Web viewer mostra orbit, zoom, fullscreen, poster, auto-rotate. | 4.2 |
+| AC-13 | Re-uploads não sobrescrevem versões anteriores. | 6 |
+| AC-14 | Endpoints autenticados exigem JWT válido. | 7.1 |
+| AC-15 | Endpoints respeitam ownership (cross-owner → 404). | 7.2 |
 
 ---
 
-## 1. Register and log in (US-5 AC-1)
+## 9. Critérios de não-aceitação (fora do MVP)
 
-```bash
-curl -i -c /tmp/cookies.txt -X POST http://localhost:5000/auth/register \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"alice@example.com","password":"correcthorsebatterystaple"}'
-# → 200 OK, Set-Cookie: .AspNetCore.Identity.Application=...
-```
+Os itens abaixo **não** devem ser assumidos como entregues e
+sua ausência **não é regressão**:
 
-Open `http://localhost:3000` in the browser — you should be redirected to the dashboard.
-
----
-
-## 2. Create a project + upload an IFC (US-1 AC-1, AC-3)
-
-```bash
-curl -i -b /tmp/cookies.txt -X POST http://localhost:5000/api/projects \
-  -F 'name=Living Room Sofa' \
-  -F 'description=3-seat sofa in walnut' \
-  -F 'clientLabel=Alice' \
-  -F 'file=@./sample.ifc'
-# → 201 Created, body: {"id":"<guid>","name":"...","status":"upload-received",...}
-```
-
-Validation cases (all must return `400`/`413`/`415` with a user-readable ProblemDetails):
-- `curl … -F 'name='` → `400` "Project name is required."
-- `curl … -F 'file=@./sample.pdf'` → `415` "Not a valid IFC file."
-- `curl … -F 'file=@./huge.ifc'` (if > `MAX_IFC_MB`) → `413` "File too large."
-
-Save the `id` from the 201 — it is used in the next steps.
+- Comentários em modelos.
+- Versionamento semântico explícito (v1, v2, v3...).
+- Permissões granulares (roles, ACL).
+- Digital twin / telemetria de visualização.
+- Métricas operacionais expostas (Prometheus, etc.).
+- API admin.
+- BIM tree, propriedades IFC, medições, classificação.
+- STL como formato de entrada (mesh pura, sem materiais).
+- Migração para object storage (S3/MinIO).
+- Geração automática de USDZ on-the-fly (target, mas
+  implementação concreta é decisão de tasks).
+- OpenTelemetry/APM tracing.
+- Multi-tenant.
+- `view_count` e `metadata` extraído do modelo (analytics).
+- `expires_at` em ShareLink (expiração automática).
 
 ---
 
-## 3. Watch conversion finish (US-1 AC-1, US-4 AC-3)
+## 10. Como executar localmente (referência)
+
+> Os comandos abaixo são **referência** de como a stack será
+> operada. Nenhum script de bootstrap é introduzido por este
+> plano.
 
 ```bash
-PROJECT_ID=<guid from step 2>
+# Subir stack
+docker compose up -d
 
-# Poll every 2 s, max 60 s
-for i in $(seq 1 30); do
-  STATUS=$(curl -s -b /tmp/cookies.txt \
-    http://localhost:5000/api/projects/$PROJECT_ID | jq -r .status)
-  echo "[$i] status=$STATUS"
-  [ "$STATUS" = "ready-to-publish" ] && break
-  [ "$STATUS" = "failed" ] && { echo "FAILED"; break; }
-  sleep 2
-done
-```
+# Verificar health
+curl http://localhost:8000/api/v1/health
 
-Expected: `upload-received` → (≤ 30 s for the 200 KB sample) → `ready-to-publish`.
+# Rodar migrations (após implementação)
+docker compose exec backend alembic upgrade head
 
-Inspect the worker logs to confirm the conversion path:
+# Acompanhar worker
+docker compose logs -f worker
 
-```bash
-docker compose -f app/docker-compose.yml logs --tail=50 converter
-# Expect: "claimed project=..." → "ifc-convert exit 0" → "uploaded glb=... thumb=..." → "status=ready-to-publish"
+# Abrir frontend
+open http://localhost:5173   # dev (Vite)
+# ou
+open http://localhost:8080   # prod (nginx)
 ```
 
 ---
 
-## 4. Publish + QR code (US-1 AC-2, AC-5; FR-011, FR-012, FR-013)
+## 11. Done When
 
-```bash
-curl -s -b /tmp/cookies.txt -X POST \
-  http://localhost:5000/api/projects/$PROJECT_ID/publish | jq
-```
-
-Expected:
-
-```json
-{
-  "projectId": "<guid>",
-  "publicToken": "3f2e1d0c-b9a8-7654-3210-fedcba987654",
-  "publicUrl": "http://localhost:3000/s/3f2e1d0c-b9a8-7654-3210-fedcba987654",
-  "qrCodeUrl": "http://localhost:9000/qrcodes/projects/<guid>/qr.png?X-Amz-..."
-}
-```
-
-Idempotency check: re-run the same `POST /publish` and confirm the response is identical (same `publicToken`, same `qrCodeUrl`).
-
----
-
-## 5. Open the public link (US-2 AC-1, AC-2, AC-3, AC-4; FR-016, FR-017, FR-019, FR-020)
-
-Open the `publicUrl` in a new incognito window — **no login**. Expected:
-
-- Page shows the project name and (if set) the client label.
-- Thumbnail is visible immediately.
-- Within ≤ 10 s on a 4G-class connection, the GLB finishes loading and the orbit/zoom/pan controls become active.
-- A fullscreen toggle is visible in the bottom-right of the viewer.
-- **There is no properties panel, no element-metadata tree, no measurement tool.**
-
-AR check (US-3 AC-1):
-
-- On **Android Chrome** with ARCore installed: an "Open in AR" / "View in your space" button is visible. Tapping it launches Scene Viewer and the model appears at real-world scale in the room.
-- On **iOS Safari** (iOS 15+): the AR button is visible. Tapping it hands off to Quick Look; if the GLB has no USDZ companion the user sees a fallback message.
-- On **desktop / browsers without AR**: the AR button is hidden (or rendered as disabled) and the 3D viewer remains fully functional.
-
-Negative case (US-2 AC-5):
-
-```bash
-curl -i http://localhost:5000/api/share/00000000-0000-0000-0000-000000000000
-# → 404 Not Found
-```
-
----
-
-## 6. Unguessable public links (SC-005, FR-014)
-
-```bash
-for i in $(seq 1 1000); do
-  curl -s -o /dev/null -w '%{http_code}\n' \
-    http://localhost:5000/api/share/$(uuidgen)
-done | sort | uniq -c
-```
-
-Expected output: `1000    404` (or close to it — the chance of collision is ~10⁻³⁴ for 1000 random Guids against a single real share).
-
----
-
-## 7. Tenant isolation (SC-006, FR-024, FR-025, FR-026)
-
-In a separate browser / curl session, register a second user (`bob@example.com`) and log in. Then:
-
-```bash
-# Bob's cookies
-curl -i -c /tmp/bob.txt -X POST http://localhost:5000/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"bob@example.com","password":"correcthorsebatterystaple"}'
-
-# Bob tries to read Alice's project
-curl -i -b /tmp/bob.txt http://localhost:5000/api/projects/$PROJECT_ID
-# → 404 Not Found   (NOT 403, to avoid enumeration leak)
-```
-
-Bob's `GET /api/projects` returns only Bob's (empty) list. The public share link still works for Bob (it is anonymous), but the dashboard does not show Alice's project.
-
----
-
-## 8. Observability (FR-027, FR-028)
-
-```bash
-# Make a request with an explicit correlation id
-curl -i -H 'X-Correlation-Id: test-123' \
-  -b /tmp/cookies.txt http://localhost:5000/api/projects
-
-# Find the same id in the structured logs
-docker compose -f app/docker-compose.yml logs backend | grep 'test-123'
-# → all log lines for that request carry CorrelationId=test-123
-```
-
-Trigger a failure (upload a non-IFC):
-
-```bash
-curl -i -b /tmp/cookies.txt -X POST http://localhost:5000/api/projects \
-  -F 'name=Bad' -F 'file=@./sample.pdf'
-# → 415 + ProblemDetails. The body has NO stack trace, NO internal exception type.
-```
-
----
-
-## 9. Spec compliance audit (SC-008, FR-031)
-
-The product must not present itself as a "BIM" anything:
-
-```bash
-# Zero hits in any user-facing surface
-grep -riE "BIM" \
-  app/frontend/src \
-  app/frontend/index.html \
-  app/README.md \
-  app/.env.example
-# Expect: no matches
-```
-
-A handful of internal-only mentions may remain in `app/converter/converter.py` and in EF migration filenames (historical artifacts) — the spec only forbids user-facing copy.
-
----
-
-## 10. Tear down
-
-```bash
-docker compose -f app/docker-compose.yml down -v
-```
-
----
-
-## What "done" looks like
-
-The MVP is **done** when every step above passes on a clean clone, plus the acceptance criteria checklist:
-
-- [x] US-1 AC-1: upload returns 201 + status `upload-received`.
-- [x] US-1 AC-2: publish returns a public URL and a QR code URL.
-- [x] US-1 AC-3: oversized / wrong-type / non-IFC uploads return 4xx with a clear message.
-- [x] US-1 AC-4: a bad IFC transitions the project to `failed` with a user-readable reason.
-- [x] US-1 AC-5: re-publishing returns the same link/QR.
-- [x] US-2 AC-1: public page is reachable without auth.
-- [x] US-2 AC-2: orbit / zoom / pan / fullscreen all work.
-- [x] US-2 AC-3: fullscreen mode works.
-- [x] US-2 AC-4: a project in `processing` shows a "still processing" state on its public page.
-- [x] US-2 AC-5: a bogus token returns 404 + a friendly page.
-- [x] US-3 AC-1: Android Scene Viewer launches and places the model.
-- [x] US-3 AC-2: iOS Quick Look handoff.
-- [x] US-3 AC-3: no-AR devices hide the AR button.
-- [x] US-3 AC-4: desktop does not show a broken AR button.
-- [x] US-4 AC-1…AC-5: dashboard CRUD + status visibility + retry.
-- [x] US-5 AC-1…AC-3: tenant isolation, public-page no-leak, cross-tenant 404.
-- [x] SC-005: 1,000,000 random tokens have effectively 0% chance of hitting a real one.
-- [x] SC-006: cross-tenant reads return 404.
-- [x] SC-007: the whole flow is reproducible with the commands above.
-- [x] SC-008: zero "BIM" mentions in user-facing surfaces.
+- [x] Todos os cenários do MVP listados com pré-requisitos,
+  comandos, e resultados esperados.
+- [x] Edge cases transversais (auth, permissão, resiliência,
+  rate limit) cobertos.
+- [x] Critérios de aceitação mapeados.
+- [x] Fora-do-MVP declarado explicitamente.
