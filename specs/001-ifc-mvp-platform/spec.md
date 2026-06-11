@@ -1,4 +1,4 @@
-# Feature Specification: Arch3DAR — IFC/SKP-to-AR 3D Sharing MVP
+# Feature Specification: Arch3DAR — IFC/SketchUp-to-AR 3D Sharing MVP
 
 **Feature Branch**: `001-ifc-mvp-platform`
 **Created**: 2026-06-09
@@ -7,7 +7,7 @@
 
 > **Product positioning**: Arch3DAR is **not** a BIM platform, **not** a coordination tool, and **not** an engineering suite. It lets architects, interior designers, and custom-furniture manufacturers share a single 3D model with their client through a public link and AR — solving the "I cannot see the piece in my real room" problem.
 
-> **MVP scope (clarified)**: Simplified single-tenant flow — upload page + public viewer, **no authentication**, **no dashboard**, **local filesystem storage**, **no object storage / MinIO**. Both **`.ifc` and `.skp`** are accepted in the same release. Focus: geometry, materials, textures, web 3D viewer, and AR — **not** IFC spatial tree, properties, classification, or BIM metadata.
+> **MVP scope (clarified)**: Simplified single-tenant flow — upload page + public viewer, **no authentication**, **no dashboard**, **local filesystem storage**, **no object storage / MinIO**. Accepts **`.ifc`**, **`.dae`** (SketchUp Collada export), and **`.obj`** in the same release. **Direct `.skp` upload is not supported** — SketchUp users MUST export to Collada (`.dae`) first. Focus: geometry, materials, textures, web 3D viewer, and AR — **not** IFC spatial tree, properties, classification, or BIM metadata.
 
 ---
 
@@ -20,6 +20,9 @@
 - Q: Qual layout de armazenamento no disco local? → A: **`/data/projects/{projectId}/`** — conforme correção ativa (não `/uploads`).
 - Q: Qual formato padrão do thumbnail? → A: **`thumbnail.webp`** — WebP gerado via Blender headless render.
 - Q: Como organizar conversores no Docker Compose? → A: **Sidecar único `converter`** — IfcOpenShell + Blender + USDZ + thumbnail num container Python; serviços: postgres, backend, converter, frontend.
+- Q: Qual estratégia de conversão SketchUp no MVP, dado que Blender oficial não importa `.skp` nativamente? → A: **Upload DAE/OBJ para fluxo SketchUp** — usuários exportam Collada (`.dae`, primário) ou Wavefront (`.obj`) do SketchUp; conversão via Blender headless import nativo Collada/OBJ → GLB. Upload direto de `.skp` fora de escopo; sem addon pago nem pipeline ODA.
+- Q: Como orientar usuários SketchUp na página de upload? → A: **Instruções proeminentes na página** — passos de exportação (File → Export → 3D Model → Collada `.dae`) visíveis no upload, junto à lista de formatos aceitos (`.ifc`, `.dae`, `.obj`).
+- Q: Onde bloquear upload de `.skp`? → A: **Cliente + servidor** — file picker `accept` lista apenas `.ifc`, `.dae`, `.obj`; servidor rejeita `.skp` com instruções de exportação Collada se contornado.
 
 ---
 
@@ -29,19 +32,19 @@ User stories are ordered by dependency and business value. The MVP only delivers
 
 ### User Story 1 — Architect uploads a model and receives a public link (Priority: P1)
 
-An architect (or interior designer / furniture maker) opens the upload page, submits a single `.ifc` or `.skp` file (from SketchUp, Revit, AutoCAD, ArchiCAD, Blender, etc.), waits for automatic conversion, and receives a public URL plus a QR code to send to the client. No login is required.
+An architect (or interior designer / furniture maker) opens the upload page, submits a single `.ifc`, `.dae`, or `.obj` file (from SketchUp via Collada export, Revit, AutoCAD, ArchiCAD, Blender, etc.), waits for automatic conversion, and receives a public URL plus a QR code to send to the client. SketchUp users export **File → Export → 3D Model → Collada (.dae)** before uploading. No login is required.
 
 **Why this priority**: This is the entire value proposition. Without upload + conversion + share, the product does not exist. Every other story is downstream of this one.
 
-**Independent Test**: Upload a sample `.ifc` or `.skp`, conversion completes (status = ready), the response includes a public URL and QR code, both are reachable.
+**Independent Test**: Upload a sample `.ifc` or `.dae`, conversion completes (status = ready), the response includes a public URL and QR code, both are reachable.
 
 **Acceptance Scenarios**:
 
-1. **Given** the upload page, **When** the user submits a valid `.ifc` or `.skp` file (≤ configured size limit), **Then** the system stores the original file on local disk, transitions the project to "processing", and starts conversion without blocking the upload response.
+1. **Given** the upload page, **When** the user submits a valid `.ifc`, `.dae`, or `.obj` file (≤ configured size limit), **Then** the system stores the original file on local disk, transitions the project to "processing", and starts conversion without blocking the upload response.
 2. **Given** a project whose conversion finished successfully, **When** conversion completes, **Then** the system returns (or displays) a public URL and a QR code image pointing to that URL.
-3. **Given** an upload whose extension is not `.ifc` or `.skp`, or whose size exceeds the configured limit, **When** the user submits it, **Then** the system rejects the upload before persisting any file and returns a clear, user-readable error.
+3. **Given** an upload whose extension is not `.ifc`, `.dae`, or `.obj` (including `.skp`), or whose size exceeds the configured limit, **When** the user submits it, **Then** the system rejects the upload before persisting any file and returns a clear, user-readable error (for `.skp`, the message MUST direct the user to export Collada from SketchUp).
 4. **Given** a conversion that fails internally, **When** the system detects the failure, **Then** the project status becomes "failed" with a user-readable reason, and no public link is generated.
-5. **Given** a valid `.skp` upload with materials and textures, **When** conversion completes, **Then** the generated GLB preserves visible materials and textures in the web viewer (best-effort; exact fidelity is not guaranteed for every SketchUp feature).
+5. **Given** a valid `.dae` or `.obj` upload exported from SketchUp with materials and textures, **When** conversion completes, **Then** the generated GLB preserves visible materials and textures in the web viewer (best-effort; exact fidelity is not guaranteed for every SketchUp feature).
 
 ---
 
@@ -94,9 +97,10 @@ Deferred. The simplified MVP is single-tenant with no authentication. Public lin
 
 ### Edge Cases
 
-- **Oversized file**: a user uploads an `.ifc` or `.skp` larger than the configured limit. The upload must be rejected before the file is fully transferred (or buffered) and the user must see a clear "file too large" message.
-- **Wrong file type**: a user uploads a `.pdf` or `.jpg` renamed to `.ifc` or `.skp`. The system must validate the file signature (not just the extension) and reject the upload with a clear message.
-- **SKP with unsupported SketchUp features**: conversion may succeed with simplified geometry or materials; the user sees a warning or generic "partial conversion" message rather than a silent broken viewer.
+- **Oversized file**: a user uploads an `.ifc`, `.dae`, or `.obj` larger than the configured limit. The upload must be rejected before the file is fully transferred (or buffered) and the user must see a clear "file too large" message.
+- **Wrong file type**: a user uploads a `.pdf` or `.jpg` renamed to `.ifc`, `.dae`, or `.obj`. The system must validate the file signature (not just the extension) and reject the upload with a clear message.
+- **Raw `.skp` upload**: a SketchUp user attempts `.skp` directly (blocked by file picker `accept` on the client; if bypassed, rejected server-side) instead of exporting Collada. The system must reject with a message explaining how to export `.dae` from SketchUp (File → Export → 3D Model → Collada).
+- **DAE/OBJ with unsupported SketchUp features**: conversion may succeed with simplified geometry or materials; the user sees a warning or generic "partial conversion" message rather than a silent broken viewer.
 - **USDZ generation failure**: iPhone AR requires a valid USDZ; if USDZ generation fails, the project is marked `failed` and AR on iOS is not offered.
 - **Conversion never finishes / worker dies**: the project is stuck in "processing". The system must have a timeout/recovery policy that marks the project as "failed" after a configurable deadline and surfaces that to the user.
 - **Network interruption mid-upload**: partial files must not be treated as valid uploads; on retry the user should not see a corrupted state.
@@ -114,17 +118,19 @@ Deferred. The simplified MVP is single-tenant with no authentication. Public lin
 **Project lifecycle**
 
 - **FR-001**: The system MUST accept a model upload via a public upload page without requiring authentication.
-- **FR-002**: The system MUST accept a single `.ifc` or `.skp` file per upload.
+- **FR-001a**: The upload page MUST display prominent SketchUp export instructions (File → Export → 3D Model → Collada `.dae`) and list accepted formats (`.ifc`, `.dae`, `.obj`). The page MUST NOT imply that direct `.skp` upload is supported.
+- **FR-001b**: The upload file picker MUST restrict selection via `accept` to `.ifc`, `.dae`, and `.obj` only. If a `.skp` file is submitted despite client restrictions (e.g., API call or picker bypass), the server MUST reject it with the SketchUp Collada export instructions — not a generic "invalid format" message.
+- **FR-002**: The system MUST accept a single `.ifc`, `.dae`, or `.obj` file per upload. Direct `.skp` upload is NOT supported.
 - **FR-003**: The system MUST validate uploaded files by content signature (not extension alone) and reject invalid files with a user-readable message before persisting them.
 - **FR-004**: The system MUST enforce a maximum file size per upload and reject oversized uploads with a clear message.
-- **FR-005**: The system MUST persist artifacts under **`/data/projects/{projectId}/`** on local filesystem storage with these filenames: `original.ifc` or `original.skp` (matching upload format), `model.glb`, `model.usdz`, and **`thumbnail.webp`**.
+- **FR-005**: The system MUST persist artifacts under **`/data/projects/{projectId}/`** on local filesystem storage with these filenames: `original.ifc`, `original.dae`, or `original.obj` (matching upload format), `model.glb`, `model.usdz`, and **`thumbnail.webp`**.
 - **FR-006**: The system MUST track the project lifecycle through these states: `upload-received`, `processing`, `ready`, `failed`. A successful conversion automatically yields a shareable public link (no separate publish step).
 
 **Conversion**
 
 - **FR-007**: The system MUST convert each uploaded source file into GLB asynchronously, without blocking the upload HTTP response.
 - **FR-007a**: IFC uploads MUST be converted via IfcOpenShell (`IfcConvert` or equivalent).
-- **FR-007b**: SKP uploads MUST be converted via **Blender headless direct import/export: SKP → GLB** (native SKP import + glTF 2.0 export). No DAE intermediate step and no Assimp in the primary path.
+- **FR-007b**: DAE and OBJ uploads (SketchUp workflow) MUST be converted via **Blender headless: Collada/OBJ import → GLB export** (Blender native `import_scene.dae` / `import_scene.obj` + glTF 2.0 export). No third-party SketchUp importer addon and no Assimp in the primary path. Native `.skp` import is explicitly out of scope.
 - **FR-007c**: The system MUST generate a USDZ from GLB for iPhone Quick Look AR; USDZ generation failure MUST mark the project `failed`.
 - **FR-008**: The system MUST generate a **`thumbnail.webp`** preview image from the converted model during conversion (Blender headless render).
 - **FR-009**: The system MUST handle conversion failures by transitioning the project to `failed` with a user-readable reason and MUST NOT generate a public link for a failed project.
@@ -163,7 +169,7 @@ Deferred. The simplified MVP is single-tenant with no authentication. Public lin
 **Extensibility**
 
 - **FR-029**: The conversion pipeline MUST accept a single source model and produce GLB, USDZ, and thumbnail. New input formats require only a new converter registration.
-- **FR-030**: The MVP MUST support `.ifc` and `.skp` only. Other formats (RVT, DWG, DXF, OBJ, STL, DAE, FBX) are explicitly out of scope but the architecture MUST NOT block them.
+- **FR-030**: The MVP MUST support `.ifc`, `.dae`, and `.obj` only. Other formats (`.skp`, RVT, DWG, DXF, STL, FBX) are explicitly out of scope but the architecture MUST NOT block them. Future native `.skp` support MAY be added via a new converter registration without changing upload or viewer flows.
 
 **Explicit non-goals (to prevent scope creep)**
 
@@ -173,8 +179,8 @@ Deferred. The simplified MVP is single-tenant with no authentication. Public lin
 
 ### Key Entities *(include if feature involves data)*
 
-- **Project**: a single 3D sharing unit. Has a source format (`ifc` | `skp`), current status, public token, and timestamps. One project has one source file and generated artifacts (GLB, USDZ, thumbnail).
-- **ProjectFile**: durable artifacts at `/data/projects/{projectId}/` — `original.ifc|skp`, `model.glb`, `model.usdz`, `thumbnail.webp`. Referenced from the project record by relative path within the data volume.
+- **Project**: a single 3D sharing unit. Has a source format (`ifc` | `dae` | `obj`), current status, public token, and timestamps. One project has one source file and generated artifacts (GLB, USDZ, thumbnail).
+- **ProjectFile**: durable artifacts at `/data/projects/{projectId}/` — `original.ifc|dae|obj`, `model.glb`, `model.usdz`, `thumbnail.webp`. Referenced from the project record by relative path within the data volume.
 - **ShareLink**: a public, non-sequential, unguessable token bound to a ready project. Resolves to the public viewer page. QR code is derived from this token's public URL.
 
 ---
@@ -185,15 +191,15 @@ Outcomes are measured from the architect's and client's perspective, not from sy
 
 ### Measurable Outcomes
 
-- **SC-001**: A user can go from "open upload page" to "client has a working public link" in under 5 minutes for a typical 50 MB `.ifc` or `.skp` file on standard broadband (≤ 200 ms latency, ≥ 10 Mbps up).
-- **SC-002**: 100% of valid `.ifc` and `.skp` uploads of size ≤ 100 MB complete conversion (no project stuck in `processing` beyond the configured timeout) on the first attempt in a healthy environment.
+- **SC-001**: A user can go from "open upload page" to "client has a working public link" in under 5 minutes for a typical 50 MB `.ifc` or `.dae` file on standard broadband (≤ 200 ms latency, ≥ 10 Mbps up).
+- **SC-002**: 100% of valid `.ifc`, `.dae`, and `.obj` uploads of size ≤ 100 MB complete conversion (no project stuck in `processing` beyond the configured timeout) on the first attempt in a healthy environment.
 - **SC-003**: 100% of public links load in a modern mobile browser (Chrome on Android 10+ and Safari on iOS 15+) in under 10 seconds on 4G, showing the thumbnail first and the 3D model second.
 - **SC-004**: 100% of public pages on supported AR-capable mobile devices offer a working "Open in AR" handoff (Android Scene Viewer + iOS Quick Look via USDZ); on unsupported devices the option is hidden and the 3D viewer still works.
 - **SC-005**: Public links are unguessable: guessing 1,000,000 random URLs has effectively 0% chance of returning a valid public page.
 - **SC-006**: *(Deferred — multi-tenant)* Replaced for MVP by SC-005 unguessable tokens.
 - **SC-007**: The end-to-end flow (upload → conversion → public page loads → AR handoff) passes automated tests on a clean local environment via `docker compose up`.
 - **SC-008**: UI, copy, and docs use "3D model" / "architecture / interior / furniture" and contain zero occurrences of "BIM platform", "BIM collaboration", "BIM coordination", "BIM metadata", "BIM management", or "BIM engineering".
-- **SC-009**: SKP uploads with standard SketchUp materials and textures render with recognizable colors and textures in the web viewer (best-effort; not pixel-perfect parity with SketchUp desktop).
+- **SC-009**: DAE/OBJ uploads exported from SketchUp with standard materials and textures render with recognizable colors and textures in the web viewer (best-effort; not pixel-perfect parity with SketchUp desktop).
 
 ---
 
@@ -202,10 +208,10 @@ Outcomes are measured from the architect's and client's perspective, not from sy
 - **Users have stable broadband**. Upload, conversion, and viewing assume a connection that can sustain tens of MB transfers; the system is not designed for offline use.
 - **One model per upload in MVP**. Multi-file or multi-revision workflows are out of scope.
 - **No authentication in MVP**. Upload page and public viewer are open; access control is via unguessable public tokens only.
-- **IfcOpenShell and Blender headless are available in the conversion environment**. IFC via IfcConvert; SKP via Blender direct SKP→GLB (same Blender runtime also used for thumbnail rendering).
+- **IfcOpenShell and Blender headless are available in the conversion environment**. IFC via IfcConvert; DAE/OBJ via Blender native Collada/Wavefront import → GLB (same Blender runtime also used for thumbnail rendering). Stock Blender 4.x does NOT include a native `.skp` importer — SketchUp users export Collada before upload.
 - **USDZ via `usd_from_gltf`** (or equivalent) is available for GLB→USDZ conversion required by iPhone Quick Look.
 - **Local filesystem storage at `/data/projects/{projectId}/`**. Files live on a shared Docker volume (`project_data:/data`), not in object storage / MinIO / S3.
-- **Single converter sidecar in Docker Compose**. One `converter` service (Python) bundles IfcOpenShell, Blender headless, `usd_from_gltf`, and thumbnail rendering. Compose stack: `postgres`, `backend`, `converter`, `frontend` (+ nginx). No separate IFC/SKP worker containers.
+- **Single converter sidecar in Docker Compose**. One `converter` service (Python) bundles IfcOpenShell, Blender headless, `usd_from_gltf`, and thumbnail rendering. Compose stack: `postgres`, `backend`, `converter`, `frontend` (+ nginx). No separate per-format worker containers.
 - **The conversion worker is separate from the HTTP API**. Conversion runs out-of-band and does not block the upload response.
 - **Mobile devices are the primary AR target**. Desktop is 3D-viewer only; AR is mobile-first.
 - **HTTPS is required for AR** on mobile browsers.

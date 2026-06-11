@@ -1,4 +1,4 @@
-"""Arch3DAR model-conversion worker — IFC/SKP → GLB → USDZ on local disk."""
+"""Arch3DAR model-conversion worker — IFC/DAE/OBJ → GLB → USDZ on local disk."""
 
 from __future__ import annotations
 
@@ -14,8 +14,8 @@ from pydantic import BaseModel
 
 from ifc_pipeline import ConversionFailure as IfcConversionFailure
 from ifc_pipeline import run_ifc_pipeline
-from skp_pipeline import ConversionFailure as SkpConversionFailure
-from skp_pipeline import run_skp_pipeline
+from mesh_pipeline import ConversionFailure as MeshConversionFailure
+from mesh_pipeline import run_mesh_pipeline
 
 logger = logging.getLogger("arch3dar.converter")
 logging.basicConfig(
@@ -29,7 +29,12 @@ BLENDER_PATH = os.environ.get("BLENDER_PATH", "blender")
 IFC_CONVERSION_TIMEOUT_S = int(
     os.environ.get("IFC_CONVERSION_TIMEOUT_S", os.environ.get("CONVERSION_TIMEOUT_S", "120"))
 )
-SKP_CONVERSION_TIMEOUT_S = int(os.environ.get("SKP_CONVERSION_TIMEOUT_S", "180"))
+MESH_CONVERSION_TIMEOUT_S = int(
+    os.environ.get(
+        "MESH_CONVERSION_TIMEOUT_S",
+        os.environ.get("SKP_CONVERSION_TIMEOUT_S", "180"),
+    )
+)
 AR_MAX_EXTENT_M = float(os.environ.get("AR_MAX_EXTENT_M", "2"))
 
 GLB_NAME = "model.glb"
@@ -70,15 +75,15 @@ async def convert(
     sourceFormat: str = Form("ifc"),
     file: UploadFile = File(...),
 ) -> ConvertResponse:
-    """Convert IFC or SKP upload to GLB, USDZ, and WebP thumbnail on local disk.
+    """Convert IFC, DAE, or OBJ upload to GLB, USDZ, and WebP thumbnail on local disk.
 
-    Form fields: projectId (UUID), sourceFormat (ifc|skp), file (binary).
+    Form fields: projectId (UUID), sourceFormat (ifc|dae|obj), file (binary).
     Returns glbPath, usdzPath, thumbnailPath (under projects/{id}/), durationMs.
     """
     started = time.monotonic()
     fmt = sourceFormat.lower().strip()
-    if fmt not in ("ifc", "skp"):
-        raise HTTPException(status_code=400, detail="sourceFormat must be ifc or skp")
+    if fmt not in ("ifc", "dae", "obj"):
+        raise HTTPException(status_code=400, detail="sourceFormat must be ifc, dae, or obj")
 
     source_bytes = await file.read()
     if not source_bytes:
@@ -86,7 +91,7 @@ async def convert(
 
     try:
         await asyncio.to_thread(_run_pipeline, source_bytes, projectId, fmt)
-    except (IfcConversionFailure, SkpConversionFailure) as e:
+    except (IfcConversionFailure, MeshConversionFailure) as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
 
     rel = f"projects/{projectId}"
@@ -101,12 +106,13 @@ async def convert(
 
 def _run_pipeline(source_bytes: bytes, project_id: str, source_format: str) -> None:
     out_dir = _project_dir(project_id)
-    if source_format == "skp":
-        run_skp_pipeline(
+    if source_format in ("dae", "obj"):
+        run_mesh_pipeline(
             source_bytes,
             out_dir,
+            mesh_format=source_format,
             blender_path=BLENDER_PATH,
-            skp_timeout_s=SKP_CONVERSION_TIMEOUT_S,
+            mesh_timeout_s=MESH_CONVERSION_TIMEOUT_S,
             ar_max_extent_m=AR_MAX_EXTENT_M,
         )
     else:

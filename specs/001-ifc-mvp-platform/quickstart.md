@@ -1,11 +1,11 @@
-# Quickstart Validation: Arch3DAR — IFC/SKP → Web 3D + AR
+# Quickstart Validation: Arch3DAR — IFC/SketchUp → Web 3D + AR
 
 **Phase**: 1
 **Branch**: `main`
 **Date**: 2026-06-10
 **Plan**: `specs/001-ifc-mvp-platform/plan.md`
 
-> Cenários executáveis: upload IFC **ou** SKP → GLB + USDZ + thumbnail WebP → AR Android + iPhone, sem MinIO.
+> Cenários executáveis: upload IFC **ou** DAE/OBJ (SketchUp export) → GLB + USDZ + thumbnail WebP → AR Android + iPhone, sem MinIO.
 
 ---
 
@@ -18,7 +18,7 @@
 | HTTPS + valid cert | TLS | Quick Look requires HTTPS |
 | iPhone Safari + Android Chrome | iOS 15+ / Android 10+ | Manual AR |
 | Sample `.ifc` | ~200 KB | `app/tests/backend/Integration/Fixtures/sample.ifc` |
-| Sample `.skp` | ~1–5 MB | Export from SketchUp or test fixture (Phase B) |
+| Sample `.dae` | ~1–5 MB | Export from SketchUp: File → Export → 3D Model → Collada |
 
 **Verify no MinIO**:
 
@@ -44,7 +44,7 @@ curl -s http://localhost:8080/health   # converter
 
 Expected services: `postgres`, `converter`, `backend`, `frontend`, `nginx` — **no minio**.
 
-Verify Blender in converter:
+Verify Blender in converter (stock — no SKP addon required):
 
 ```bash
 docker compose exec converter blender --version
@@ -67,20 +67,23 @@ Save `TOKEN` and `PROJECT_ID`.
 
 ---
 
-## 2. Upload SKP (automated)
+## 2. Upload DAE (SketchUp workflow)
+
+Export a model from SketchUp as Collada (`.dae`), then:
 
 ```bash
 curl -s -X POST http://localhost:5001/upload \
-  -F 'file=@./tests/backend/Integration/Fixtures/sample.skp' \
-  -F 'name=SKP AR Test' | jq .
+  -F 'file=@./tests/backend/Integration/Fixtures/sample.dae' \
+  -F 'name=DAE AR Test' | jq .
 ```
 
-**Expected**: `status: "Ready"`, `sourceFormat: "skp"`.
+**Expected**: `status: "Ready"`, `sourceFormat: "dae"`.
 
 **Failure cases**:
 - PDF renamed → `415`
+- Raw `.skp` upload → `415` with SketchUp export instructions
 - File > 100 MB → `413`
-- Invalid SKP zip → `415`
+- Invalid DAE XML → `415`
 
 ---
 
@@ -93,8 +96,8 @@ docker compose exec backend ls -la /data/projects/${PROJECT_ID}/
 **Expected** (IFC project):
 - `original.ifc`, `model.glb`, `model.usdz`, `thumbnail.webp`
 
-**Expected** (SKP project):
-- `original.skp`, `model.glb`, `model.usdz`, `thumbnail.webp`
+**Expected** (DAE project):
+- `original.dae`, `model.glb`, `model.usdz`, `thumbnail.webp`
 
 ### IFC pipeline
 
@@ -103,9 +106,9 @@ docker compose exec backend ls -la /data/projects/${PROJECT_ID}/
 3. usd_from_gltf → USDZ
 4. Blender render → thumbnail.webp
 
-### SKP pipeline
+### DAE/OBJ pipeline
 
-1. Blender import SKP → export GLB
+1. Blender import Collada/OBJ → export GLB
 2. glb_normalize
 3. usd_from_gltf → USDZ
 4. Blender render → thumbnail.webp
@@ -152,14 +155,25 @@ Open `https://<host>/s/${TOKEN}`.
 
 ---
 
-## 7. Manual AR checklist
+## 7. Upload page (manual)
+
+Open HomePage upload UI.
+
+**Expected**:
+- Prominent SketchUp export instructions (File → Export → 3D Model → Collada)
+- File picker accepts only `.ifc`, `.dae`, `.obj`
+- No mention of direct `.skp` upload
+
+---
+
+## 8. Manual AR checklist
 
 | # | Step | Android | iPhone |
 |---|---|---|---|
 | 1 | Upload IFC via HomePage | ☐ | ☐ |
-| 2 | Upload SKP via HomePage | ☐ | ☐ |
+| 2 | Upload DAE (SketchUp export) via HomePage | ☐ | ☐ |
 | 3 | Web viewer loads (both formats) | ☐ | ☐ |
-| 4 | SKP materials visible in viewer | ☐ | ☐ |
+| 4 | DAE materials visible in viewer | ☐ | ☐ |
 | 5 | `ios-src` USDZ in DOM | N/A | ☐ |
 | 6 | AR opens (Scene Viewer / Quick Look) | ☐ | ☐ no "Object could not be opened" |
 | 7 | QR scan → viewer | ☐ | ☐ |
@@ -169,7 +183,7 @@ Open `https://<host>/s/${TOKEN}`.
 
 ---
 
-## 8. Automated tests
+## 9. Automated tests
 
 ```bash
 dotnet test app/tests/backend/Integration/ -v n
@@ -179,16 +193,17 @@ cd app/converter && python -m pytest test_*.py -v
 
 ---
 
-## 9. Acceptance gate
+## 10. Acceptance gate
 
 MVP complete when all pass:
 
 1. ☐ IFC upload → Ready
-2. ☐ SKP upload → Ready
-3. ☐ `model.glb`, `model.usdz`, `thumbnail.webp` on disk
-4. ☐ Assets served direct (200, correct Content-Type, no 3xx)
-5. ☐ Android AR works (IFC + SKP)
-6. ☐ iPhone Quick Look works (IFC + SKP)
-7. ☐ SKP materials recognizable (SC-009)
-8. ☐ Zero MinIO references
-9. ☐ `docker compose up` brings full stack including Blender
+2. ☐ DAE upload → Ready
+3. ☐ `.skp` upload → 415 with Collada export hint
+4. ☐ `model.glb`, `model.usdz`, `thumbnail.webp` on disk
+5. ☐ Assets served direct (200, correct Content-Type, no 3xx)
+6. ☐ Android AR works (IFC + DAE)
+7. ☐ iPhone Quick Look works (IFC + DAE)
+8. ☐ DAE materials recognizable (SC-009)
+9. ☐ Zero MinIO references
+10. ☐ `docker compose up` brings full stack including Blender (no SKP addon)

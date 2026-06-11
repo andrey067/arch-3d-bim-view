@@ -11,7 +11,7 @@ interface UploadResult {
   qrSvg: string;
 }
 
-const MODEL_EXT = /\.(ifc|skp)$/i;
+const MODEL_EXT = /\.(ifc|dae|obj)$/i;
 
 function defaultName(filename: string): string {
   return filename.replace(MODEL_EXT, '');
@@ -46,7 +46,7 @@ export default function HomePage() {
     setError(null);
     setResult(null);
     if (!file) {
-      setError('Pick an .ifc or .skp file first.');
+      setError('Pick an .ifc, .dae, or .obj file first.');
       return;
     }
     setBusy(true);
@@ -89,10 +89,20 @@ export default function HomePage() {
   return (
     <div className="container">
       <h1>Arch3DAR</h1>
-      <p className="muted">Upload an IFC or SketchUp model, get a public link to view and place it in AR.</p>
+      <p className="muted">
+        Upload an IFC or SketchUp export (.dae / .obj), get a public link to view and place it in AR.
+      </p>
 
       {!result && (
         <form onSubmit={onSubmit} className="card">
+          <div className="sketchup-guide" style={{ marginBottom: 16, padding: 12, background: '#f5f5f0', borderRadius: 8 }}>
+            <strong>Using SketchUp?</strong>
+            <p style={{ margin: '8px 0 0' }}>
+              Export your model first: <strong>File → Export → 3D Model → Collada (.dae)</strong>, then upload
+              the <code>.dae</code> file here. Direct <code>.skp</code> upload is not supported.
+            </p>
+          </div>
+
           <label>Project name (optional)</label>
           <input
             type="text"
@@ -102,7 +112,7 @@ export default function HomePage() {
             placeholder="Living Room Sofa"
           />
 
-          <label>3D model file</label>
+          <label>3D model file (.ifc, .dae, .obj)</label>
           <div
             className={'dropzone' + (dragOver ? ' over' : '')}
             onClick={() => document.getElementById('file-input')?.click()}
@@ -118,12 +128,12 @@ export default function HomePage() {
                 <strong>{file.name}</strong> · {Math.round(file.size / 1024)} KB
               </span>
             ) : (
-              <span>Click or drop an .ifc or .skp file here</span>
+              <span>Click or drop an .ifc, .dae, or .obj file here</span>
             )}
             <input
               id="file-input"
               type="file"
-              accept=".ifc,.skp"
+              accept=".ifc,.dae,.obj"
               onChange={onPick}
               style={{ display: 'none' }}
             />

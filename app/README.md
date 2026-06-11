@@ -1,6 +1,6 @@
 # Arch3DAR
 
-Arch3DAR lets architects and designers share a 3D model (uploaded as `.ifc` or `.skp`) with clients
+Arch3DAR lets architects and designers share a 3D model (uploaded as `.ifc`, `.dae`, or `.obj`) with clients
 through a public link. Clients open the link on their phone to view the model in 3D and
 place it in their room with augmented reality (Android Scene Viewer + iOS Quick Look).
 
@@ -13,7 +13,7 @@ docker compose -f app/docker-compose.yml up -d --build
 docker compose -f app/docker-compose.yml ps
 ```
 
-Open `https://<your-host>/` to upload an IFC or SKP file. You receive a share link and QR code.
+Open `https://<your-host>/` to upload an IFC or SketchUp export (`.dae` / `.obj`). You receive a share link and QR code. SketchUp users export **File → Export → 3D Model → Collada (.dae)** — direct `.skp` upload is not supported.
 
 ## Prerequisites
 
@@ -48,7 +48,7 @@ Open `https://<your-host>/` to upload an IFC or SKP file. You receive a share li
 
 ```
 /data/projects/{projectId}/
-  original.ifc   (or original.skp)
+  original.ifc   (or original.dae / original.obj)
   model.glb
   model.usdz
   thumbnail.webp
@@ -67,14 +67,14 @@ Public URLs (same origin, no presigned redirects):
 | nginx     | HTTPS reverse proxy                 | 80, 443     |
 | frontend  | React upload + share viewer         | 3000        |
 | backend   | ASP.NET Core 9 API                  | 5000 (5001) |
-| converter | IFC/SKP → GLB → USDZ + WebP thumbnail | 8080        |
+| converter | IFC/DAE/OBJ → GLB → USDZ + WebP thumbnail | 8080        |
 | postgres  | PostgreSQL 16                       | 5432        |
 
 ## API (MVP)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/upload` | Upload IFC or SKP, convert, return share link + QR |
+| POST | `/upload` | Upload IFC, DAE, or OBJ; convert; return share link + QR |
 | GET | `/share/{token}` | Viewer metadata + asset URLs |
 | GET | `/files/{id}/model.glb` | Stream GLB |
 | GET | `/files/{id}/model.usdz` | Stream USDZ (iOS Quick Look) |
@@ -83,7 +83,7 @@ Public URLs (same origin, no presigned redirects):
 
 ## Conversion pipeline
 
-When a user uploads an `.ifc` or `.skp` file, the backend saves it under `/data/projects/{projectId}/`
+When a user uploads an `.ifc`, `.dae`, or `.obj` file, the backend saves it under `/data/projects/{projectId}/`
 and calls the converter sidecar (`POST /convert`). The converter runs a **synchronous**
 pipeline; if any step fails, the project is marked `failed` and the upload returns `502`.
 
@@ -94,10 +94,10 @@ IFC bytes → IfcConvert → model.glb → glb_normalize → usd_from_gltf → m
                                               ↘ render_thumbnail → thumbnail.webp
 ```
 
-**SKP path**
+**DAE/OBJ path (SketchUp workflow)**
 
 ```
-SKP bytes → Blender headless (SKP→GLB) → model.glb → glb_normalize → usd_from_gltf → model.usdz
+DAE/OBJ bytes → Blender headless (Collada/OBJ→GLB) → model.glb → glb_normalize → usd_from_gltf → model.usdz
                                                               ↘ render_thumbnail → thumbnail.webp
 ```
 
@@ -177,10 +177,10 @@ with correct MIME types and **no redirects** (required for Quick Look).
 |----------|---------|---------|
 | `DATA_ROOT` | `/data` | Shared volume with backend |
 | `IFCCONVERT_PATH` | `/usr/local/bin/IfcConvert` | IfcOpenShell CLI |
-| `BLENDER_PATH` | `/opt/blender/blender` | Headless Blender (SKP import + thumbnail) |
+| `BLENDER_PATH` | `/opt/blender/blender` | Headless Blender (DAE/OBJ import + thumbnail) |
 | `USD_FROM_GLTF_PATH` | `/usr/local/bin/usd_from_gltf` | GLB → USDZ |
 | `IFC_CONVERSION_TIMEOUT_S` | `120` | IFC subprocess timeout |
-| `SKP_CONVERSION_TIMEOUT_S` | `180` | SKP/Blender subprocess timeout |
+| `MESH_CONVERSION_TIMEOUT_S` | `180` | DAE/OBJ Blender subprocess timeout |
 | `AR_MAX_EXTENT_M` | `0.5` | Tabletop longest-axis size (metres) |
 
 ### Manual re-conversion (existing project)

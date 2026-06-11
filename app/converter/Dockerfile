@@ -8,7 +8,7 @@ ENV IFCCONVERT_PATH=/usr/local/bin/IfcConvert
 ENV USD_FROM_GLTF_PATH=/usr/local/bin/usd_from_gltf
 ENV BLENDER_PATH=/opt/blender/blender
 ENV IFC_CONVERSION_TIMEOUT_S=120
-ENV SKP_CONVERSION_TIMEOUT_S=180
+ENV MESH_CONVERSION_TIMEOUT_S=180
 ENV LD_LIBRARY_PATH=/usr/local/lib:/usr/local/ufg/lib:/usr/local/USDinst/lib
 ENV PXR_PLUGINPATH_NAME=/usr/local/USDinst/lib/usd
 
@@ -58,7 +58,7 @@ COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
 WORKDIR /app
-COPY converter_service.py usd_converter.py glb_normalize.py ifc_pipeline.py skp_to_glb.py skp_pipeline.py render_thumbnail.py .
+COPY converter_service.py usd_converter.py glb_normalize.py ifc_pipeline.py mesh_to_glb.py mesh_pipeline.py render_thumbnail.py .
 
 RUN mkdir -p /data
 

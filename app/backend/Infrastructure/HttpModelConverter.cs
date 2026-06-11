@@ -29,7 +29,12 @@ public class HttpModelConverter
         CancellationToken ct)
     {
         using var content = new MultipartFormDataContent();
-        var ext = sourceFormat == SourceFormat.Skp ? "skp" : "ifc";
+        var ext = sourceFormat switch
+        {
+            SourceFormat.Dae => "dae",
+            SourceFormat.Obj => "obj",
+            _ => "ifc",
+        };
         var fileContent = new ByteArrayContent(sourceBytes);
         fileContent.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/octet-stream");
         content.Add(fileContent, "file", $"{projectId}.{ext}");

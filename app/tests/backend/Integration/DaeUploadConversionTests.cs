@@ -11,24 +11,52 @@ using Xunit;
 
 namespace Arch3DAr.Backend.Tests.Integration;
 
-public class SkpUploadConversionTests : IClassFixture<WebAppFactory>
+public class DaeUploadConversionTests : IClassFixture<WebAppFactory>
 {
     private readonly WebAppFactory _factory;
 
-    public SkpUploadConversionTests(WebAppFactory factory) => _factory = factory;
+    public DaeUploadConversionTests(WebAppFactory factory) => _factory = factory;
 
     [Fact]
-    public async Task Upload_Skp_With_Mocked_Converter_Writes_Files_And_Returns_Ready()
+    public async Task Upload_Dae_With_Mocked_Converter_Writes_Files_And_Returns_Ready()
     {
         var client = _factory.WithWebHostBuilder(builder =>
         {
             builder.ConfigureServices(services =>
             {
                 services.AddHttpClient<HttpModelConverter>()
-                    .ConfigurePrimaryHttpMessageHandler(() => new MockSkpConverterHandler(_factory.DataRoot));
+                    .ConfigurePrimaryHttpMessageHandler(() => new MockMeshConverterHandler(_factory.DataRoot, "dae"));
             });
         }).CreateClient();
 
+        var fixturePath = Path.Combine(AppContext.BaseDirectory, "Integration", "Fixtures", "sample.dae");
+        File.Exists(fixturePath).Should().BeTrue();
+
+        await using var stream = File.OpenRead(fixturePath);
+        using var content = new MultipartFormDataContent();
+        content.Add(new StreamContent(stream), "file", "sample.dae");
+        content.Add(new StringContent("DAE Test Model"), "name");
+
+        var response = await client.PostAsync("/upload", content);
+        var body = await response.Content.ReadFromJsonAsync<UploadResponse>();
+
+        response.StatusCode.Should().Be(HttpStatusCode.OK);
+        body.Should().NotBeNull();
+        body!.status.Should().Be("Ready");
+        body.sourceFormat.Should().Be("dae");
+
+        using var scope = _factory.Services.CreateScope();
+        var storage = scope.ServiceProvider.GetRequiredService<LocalFileStorage>();
+        storage.FileExists(body.projectId, LocalFileStorage.DaeFileName).Should().BeTrue();
+        storage.FileExists(body.projectId, LocalFileStorage.GlbFileName).Should().BeTrue();
+        storage.FileExists(body.projectId, LocalFileStorage.UsdzFileName).Should().BeTrue();
+        storage.FileExists(body.projectId, LocalFileStorage.ThumbnailFileName).Should().BeTrue();
+    }
+
+    [Fact]
+    public async Task Upload_Skp_Returns_415_With_Collada_Export_Hint()
+    {
+        var client = _factory.CreateClient();
         var fixturePath = EnsureSampleSkpFixture();
 
         await using var stream = File.OpenRead(fixturePath);
@@ -37,19 +65,11 @@ public class SkpUploadConversionTests : IClassFixture<WebAppFactory>
         content.Add(new StringContent("SKP Test Model"), "name");
 
         var response = await client.PostAsync("/upload", content);
-        var body = await response.Content.ReadFromJsonAsync<UploadResponse>();
+        var body = await response.Content.ReadAsStringAsync();
 
-        response.StatusCode.Should().Be(HttpStatusCode.OK);
-        body.Should().NotBeNull();
-        body!.status.Should().Be("Ready");
-        body.sourceFormat.Should().Be("skp");
-
-        using var scope = _factory.Services.CreateScope();
-        var storage = scope.ServiceProvider.GetRequiredService<LocalFileStorage>();
-        storage.FileExists(body.projectId, LocalFileStorage.SkpFileName).Should().BeTrue();
-        storage.FileExists(body.projectId, LocalFileStorage.GlbFileName).Should().BeTrue();
-        storage.FileExists(body.projectId, LocalFileStorage.UsdzFileName).Should().BeTrue();
-        storage.FileExists(body.projectId, LocalFileStorage.ThumbnailFileName).Should().BeTrue();
+        response.StatusCode.Should().Be(HttpStatusCode.UnsupportedMediaType);
+        body.Should().Contain("Collada");
+        body.Should().Contain(".dae");
     }
 
     private static string EnsureSampleSkpFixture()
@@ -76,11 +96,16 @@ public class SkpUploadConversionTests : IClassFixture<WebAppFactory>
         string status,
         string shareUrl);
 
-    private sealed class MockSkpConverterHandler : HttpMessageHandler
+    private sealed class MockMeshConverterHandler : HttpMessageHandler
     {
         private readonly string _dataRoot;
+        private readonly string _expectedFormat;
 
-        public MockSkpConverterHandler(string dataRoot) => _dataRoot = dataRoot;
+        public MockMeshConverterHandler(string dataRoot, string expectedFormat)
+        {
+            _dataRoot = dataRoot;
+            _expectedFormat = expectedFormat;
+        }
 
         protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
         {
@@ -118,7 +143,7 @@ public class SkpUploadConversionTests : IClassFixture<WebAppFactory>
                 }
             }
 
-            if (string.IsNullOrEmpty(projectId) || sourceFormat != "skp")
+            if (string.IsNullOrEmpty(projectId) || sourceFormat != _expectedFormat)
             {
                 return new HttpResponseMessage(HttpStatusCode.BadRequest);
             }

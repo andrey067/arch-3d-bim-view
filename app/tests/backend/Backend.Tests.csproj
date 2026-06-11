@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <None Include="Integration\Fixtures\sample.ifc" CopyToOutputDirectory="PreserveNewest" />
+    <None Include="Integration\Fixtures\sample.dae" CopyToOutputDirectory="PreserveNewest" />
   </ItemGroup>
 
 </Project>

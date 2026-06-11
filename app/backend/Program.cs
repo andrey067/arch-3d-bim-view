@@ -1,4 +1,3 @@
-using System.IO.Compression;
 using System.Text;
 using Arch3DAr.Backend.Domain;
 using Arch3DAr.Backend.Infrastructure;
@@ -7,6 +6,9 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.EntityFrameworkCore;
 using Serilog;
 using Serilog.Formatting.Compact;
+
+const string SkpExportHint =
+    "Export your model from SketchUp as Collada (.dae): File → Export → 3D Model → Collada, then upload the .dae file.";
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -178,17 +180,26 @@ app.MapPost("/upload", async (
             detail: $"Maximum allowed size is {maxUploadMb} MB.");
     }
 
-    var extension = Path.GetExtension(file.FileName);
-    SourceFormat? sourceFormat = extension.ToLowerInvariant() switch
+    var extension = Path.GetExtension(file.FileName).ToLowerInvariant();
+    if (extension == ".skp")
+    {
+        return Results.Problem(
+            statusCode: 415,
+            title: "SketchUp .skp not supported",
+            detail: SkpExportHint);
+    }
+
+    SourceFormat? sourceFormat = extension switch
     {
         ".ifc" => SourceFormat.Ifc,
-        ".skp" => SourceFormat.Skp,
+        ".dae" => SourceFormat.Dae,
+        ".obj" => SourceFormat.Obj,
         _ => null,
     };
     if (sourceFormat is null)
     {
         return Results.Problem(statusCode: 415, title: "Invalid file type",
-            detail: "Only .ifc and .skp files are accepted.");
+            detail: "Only .ifc, .dae, and .obj files are accepted.");
     }
 
     byte[] sourceBytes;
@@ -208,10 +219,15 @@ app.MapPost("/upload", async (
                 detail: "File does not look like an IFC document.");
         }
     }
-    else if (!IsValidSkpArchive(sourceBytes))
+    else if (sourceFormat == SourceFormat.Dae && !IsValidDaeDocument(sourceBytes))
     {
-        return Results.Problem(statusCode: 415, title: "Invalid SKP",
-            detail: "File does not look like a SketchUp (.skp) archive.");
+        return Results.Problem(statusCode: 415, title: "Invalid DAE",
+            detail: "File does not look like a Collada (.dae) document.");
+    }
+    else if (sourceFormat == SourceFormat.Obj && !IsValidObjDocument(sourceBytes))
+    {
+        return Results.Problem(statusCode: 415, title: "Invalid OBJ",
+            detail: "File does not look like a Wavefront (.obj) document.");
     }
 
     var name = (form["name"].ToString() ?? Path.GetFileNameWithoutExtension(file.FileName)).Trim();
@@ -366,28 +382,37 @@ app.MapGet("/qrcode/{token}", async (string token, AppDbContext db, QrCodeServic
 
 app.Run();
 
-static bool IsValidSkpArchive(byte[] bytes)
+static bool IsValidDaeDocument(byte[] bytes)
 {
-    if (bytes.Length < 4 || bytes[0] != 0x50 || bytes[1] != 0x4B || bytes[2] != 0x03 || bytes[3] != 0x04)
+    if (bytes.Length < 16)
     {
         return false;
     }
 
-    try
-    {
-        using var ms = new MemoryStream(bytes);
-        using var zip = new ZipArchive(ms, ZipArchiveMode.Read);
-        foreach (var entry in zip.Entries)
-        {
-            if (entry.FullName.StartsWith("SketchUp/", StringComparison.OrdinalIgnoreCase))
-            {
-                return true;
-            }
-        }
-    }
-    catch (InvalidDataException)
+    var head = Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(4096, bytes.Length)));
+    return head.Contains("<COLLADA", StringComparison.OrdinalIgnoreCase)
+           || (head.Contains("<?xml", StringComparison.OrdinalIgnoreCase)
+               && head.Contains("COLLADA", StringComparison.OrdinalIgnoreCase));
+}
+
+static bool IsValidObjDocument(byte[] bytes)
+{
+    if (bytes.Length < 4)
     {
         return false;
+    }
+
+    var text = Encoding.UTF8.GetString(bytes.AsSpan(0, Math.Min(8192, bytes.Length)));
+    foreach (var line in text.Split('\n'))
+    {
+        var trimmed = line.TrimStart();
+        if (trimmed.StartsWith("v ", StringComparison.Ordinal)
+            || trimmed.StartsWith("v\t", StringComparison.Ordinal)
+            || trimmed.StartsWith("f ", StringComparison.Ordinal)
+            || trimmed.StartsWith("f\t", StringComparison.Ordinal))
+        {
+            return true;
+        }
     }
 
     return false;

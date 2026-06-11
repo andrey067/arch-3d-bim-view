@@ -1,4 +1,4 @@
-# Data Model: Arch3DAR — IFC/SKP MVP
+# Data Model: Arch3DAR — IFC/SketchUp MVP
 
 **Phase**: 1
 **Branch**: `main`
@@ -6,7 +6,7 @@
 **Plan**: `specs/001-ifc-mvp-platform/plan.md`
 **Research**: `specs/001-ifc-mvp-platform/research.md`
 
-> Uma tabela `projects`, arquivos no disco local. Sem auth, sem ShareLinks table, sem MinIO.
+> Uma tabela `projects`, arquivos no disco local. Sem auth, sem ShareLinks table, sem MinIO. SketchUp via DAE/OBJ export — sem `.skp`.
 
 ---
 
@@ -22,7 +22,7 @@
        ▼
 ┌──────────────┐
 │  Local files │  /data/projects/{id}/
-│  (filesystem)│  original.ifc|skp, model.glb, model.usdz, thumbnail.webp
+│  (filesystem)│  original.ifc|dae|obj, model.glb, model.usdz, thumbnail.webp
 └──────────────┘
 ```
 
@@ -35,11 +35,11 @@
 | `Id` | `uuid` | PK, default `gen_random_uuid()` | Identificador interno. Usado em `/files/{id}/...`. |
 | `PublicToken` | `varchar(32)` | NOT NULL, **unique** | Token hex 32 chars (128 bits). URL: `/s/{token}`. |
 | `Name` | `varchar(200)` | NOT NULL | Nome exibido no viewer. |
-| `SourceFormat` | `varchar(8)` | NOT NULL | `ifc` \| `skp`. |
+| `SourceFormat` | `varchar(8)` | NOT NULL | `ifc` \| `dae` \| `obj`. |
 | `Status` | `varchar(16)` | NOT NULL | `Uploading`, `Converting`, `Ready`, `Failed`. |
 | `ErrorMessage` | `varchar(500)` | NULL | Motivo legível quando `Failed`. |
 | `DataDirectory` | `varchar(512)` | NOT NULL | Path relativo: `projects/{id}`. |
-| `OriginalFileName` | `varchar(64)` | NOT NULL | `original.ifc` ou `original.skp`. |
+| `OriginalFileName` | `varchar(64)` | NOT NULL | `original.ifc`, `original.dae`, ou `original.obj`. |
 | `GlbFileName` | `varchar(64)` | NULL, default `model.glb` | Preenchido quando Ready. |
 | `UsdzFileName` | `varchar(64)` | NULL, default `model.usdz` | **Obrigatório** quando Ready. |
 | `ThumbnailFileName` | `varchar(64)` | NULL, default `thumbnail.webp` | Preenchido quando Ready. |
@@ -55,6 +55,7 @@
 
 **Removed / deferred** (vs. spec original):
 - `OwnerId`, tenant columns, MinIO object keys, `PublishedAt`, publish workflow
+- `source_format = skp` — obsoleto; `.skp` não é aceito
 
 ---
 
@@ -67,7 +68,7 @@
        │ saved, conversion started
        ▼
 ┌─────────────┐
-│ Converting  │  (IfcConvert OR Blender → normalize → USDZ → thumbnail)
+│ Converting  │  (IfcConvert OR Blender DAE/OBJ → normalize → USDZ → thumbnail)
 └──────┬──────┘
   ok   │   fail
    ┌───┴───┐
@@ -87,7 +88,8 @@
 | Arquivo | Path | Content-Type (HTTP) | Público |
 |---|---|---|---|
 | Original IFC | `/data/projects/{id}/original.ifc` | — | Não |
-| Original SKP | `/data/projects/{id}/original.skp` | — | Não |
+| Original DAE | `/data/projects/{id}/original.dae` | — | Não |
+| Original OBJ | `/data/projects/{id}/original.obj` | — | Não |
 | GLB | `/data/projects/{id}/model.glb` | `model/gltf-binary` | Sim |
 | USDZ | `/data/projects/{id}/model.usdz` | `model/vnd.usdz+zip` | Sim |
 | Thumbnail | `/data/projects/{id}/thumbnail.webp` | `image/webp` | Sim |
@@ -96,7 +98,9 @@
 - Diretório criado antes da escrita do original.
 - GLB, USDZ, WebP devem ter `length > 0`.
 - USDZ deve ser ZIP válido (teste integração).
-- SKP upload: ZIP magic + estrutura SketchUp (ver R-19).
+- DAE upload: XML com elemento `COLLADA` (ver R-21).
+- OBJ upload: formato texto Wavefront com vértices/faces.
+- **SKP upload**: rejeitar antes de persistir; mensagem com instruções export Collada.
 
 ---
 
@@ -109,7 +113,7 @@
   "token": "a1b2c3d4e5f6...",
   "projectId": "8b7e4f1a-1c2d-4e3f-9a5b-6c7d8e9f0a1b",
   "name": "Kitchen Island",
-  "sourceFormat": "skp",
+  "sourceFormat": "dae",
   "status": "Ready",
   "shareUrl": "https://app.example.com/s/a1b2c3d4...",
   "qrSvg": "<svg>...</svg>"
@@ -122,7 +126,7 @@
 {
   "name": "Kitchen Island",
   "status": "Ready",
-  "sourceFormat": "skp",
+  "sourceFormat": "dae",
   "glbUrl": "https://app.example.com/files/8b7e4f1a-.../model.glb",
   "usdzUrl": "https://app.example.com/files/8b7e4f1a-.../model.usdz",
   "thumbnailUrl": "https://app.example.com/files/8b7e4f1a-.../thumbnail.webp"
@@ -137,11 +141,22 @@
 | `Failed` | 404 |
 | token inválido | 404 |
 
+### SKP rejection (`POST /upload` → 415)
+
+```json
+{
+  "type": "https://arch3dar.com/errors/unsupported-format",
+  "title": "SketchUp .skp not supported",
+  "status": 415,
+  "detail": "Export your model from SketchUp as Collada (.dae): File → Export → 3D Model → Collada, then upload the .dae file."
+}
+```
+
 ---
 
 ## Migrations
 
-Migration `20260610000001_AddSourceFormatAndWebpThumbnail.cs`:
-- Add `SourceFormat varchar(8) NOT NULL DEFAULT 'ifc'`
-- Rename `IfcFileName` → `OriginalFileName` (or add column + backfill)
-- Update default `ThumbnailFileName` to `thumbnail.webp`
+Migration `20260610130000_AddSourceFormat.cs` (update):
+- `SourceFormat` enum values: `ifc`, `dae`, `obj` (remove `skp` if present)
+- `OriginalFileName` supports `original.dae`, `original.obj`
+- Default `ThumbnailFileName` = `thumbnail.webp`

@@ -1,4 +1,4 @@
-"""Blender headless: SKP → GLB. Callable as subprocess or inside Blender (--python)."""
+"""Blender headless: DAE/OBJ → GLB. Callable as subprocess or inside Blender (--python)."""
 
 from __future__ import annotations
 
@@ -8,23 +8,29 @@ import os
 import subprocess
 import sys
 
-logger = logging.getLogger("arch3dar.converter.skp")
+logger = logging.getLogger("arch3dar.converter.mesh")
 
-SKP_NAME = "original.skp"
+DAE_NAME = "original.dae"
+OBJ_NAME = "original.obj"
 GLB_NAME = "model.glb"
 
 
-class SkpConversionFailure(RuntimeError):
+class MeshConversionFailure(RuntimeError):
     pass
 
 
-def convert_skp_to_glb(
-    skp_path: str,
+def convert_mesh_to_glb(
+    input_path: str,
     glb_path: str,
     *,
+    mesh_format: str,
     blender_path: str | None = None,
     timeout_s: int = 180,
 ) -> None:
+    fmt = mesh_format.lower().strip()
+    if fmt not in ("dae", "obj"):
+        raise MeshConversionFailure(f"unsupported mesh format: {mesh_format}")
+
     blender = blender_path or os.environ.get("BLENDER_PATH", "blender")
     script = os.path.abspath(__file__)
     cmd = [
@@ -34,23 +40,25 @@ def convert_skp_to_glb(
         script,
         "--",
         "--input",
-        skp_path,
+        input_path,
         "--output",
         glb_path,
+        "--format",
+        fmt,
     ]
     try:
         proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_s)
     except subprocess.TimeoutExpired as e:
-        raise SkpConversionFailure("SKP conversion timeout") from e
+        raise MeshConversionFailure("mesh conversion timeout") from e
     except FileNotFoundError as e:
-        raise SkpConversionFailure("Blender binary not found") from e
+        raise MeshConversionFailure("Blender binary not found") from e
 
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()[:400]
-        raise SkpConversionFailure(f"Blender SKP import failed: {detail}")
+        raise MeshConversionFailure(f"Blender {fmt.upper()} import failed: {detail}")
 
     if not os.path.isfile(glb_path) or os.path.getsize(glb_path) == 0:
-        raise SkpConversionFailure("empty GLB output from SKP")
+        raise MeshConversionFailure(f"empty GLB output from {fmt.upper()}")
 
 
 def _parse_blender_args(argv: list[str]) -> argparse.Namespace:
@@ -61,42 +69,34 @@ def _parse_blender_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", required=True)
     parser.add_argument("--output", required=True)
+    parser.add_argument("--format", required=True, choices=("dae", "obj"))
     return parser.parse_args(argv)
 
 
-def _import_skp_blender(input_path: str) -> None:
+def _import_mesh_blender(input_path: str, mesh_format: str) -> None:
     import bpy
 
     bpy.ops.wm.read_factory_settings(use_empty=True)
 
-    try:
-        import addon_utils
+    if mesh_format == "dae":
+        bpy.ops.import_scene.dae(filepath=input_path)
+        return
 
-        addon_utils.enable("io_sketchup", default_set=True, persistent=False)
-    except Exception:
-        pass
+    if mesh_format == "obj":
+        if hasattr(bpy.ops.wm, "obj_import"):
+            bpy.ops.wm.obj_import(filepath=input_path)
+        else:
+            bpy.ops.import_scene.obj(filepath=input_path)
+        return
 
-    last_error: Exception | None = None
-    for op_name in ("skp", "sketchup"):
-        op = getattr(bpy.ops.import_scene, op_name, None)
-        if op is None:
-            continue
-        try:
-            op(filepath=input_path)
-            return
-        except Exception as e:
-            last_error = e
-
-    raise SkpConversionFailure(
-        f"SKP import operator unavailable or failed: {last_error}"
-    )
+    raise MeshConversionFailure(f"unsupported mesh format: {mesh_format}")
 
 
 def _blender_main() -> None:
     args = _parse_blender_args(sys.argv)
     import bpy
 
-    _import_skp_blender(args.input)
+    _import_mesh_blender(args.input, args.format)
     bpy.ops.export_scene.gltf(filepath=args.output, export_format="GLB")
 
 

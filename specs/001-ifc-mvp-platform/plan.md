@@ -1,12 +1,12 @@
-# Implementation Plan: Arch3DAR — IFC/SKP → Web 3D + AR MVP
+# Implementation Plan: Arch3DAR — IFC/SketchUp → Web 3D + AR MVP
 
 **Branch**: `main` | **Date**: 2026-06-10 | **Spec**: [spec.md](spec.md)
 
-**Input**: SpecDrive sobre correção ativa — MVP simplificado (sem auth), upload `.ifc` ou `.skp`, conversão GLB + USDZ + thumbnail WebP, link público, AR Android + iPhone.
+**Input**: SpecDrive MVP simplificado (sem auth). Upload **`.ifc`**, **`.dae`**, **`.obj`**. SketchUp via Collada export (sem `.skp` direto). Conversão GLB + USDZ + thumbnail WebP, link público, AR Android + iPhone.
 
 ## Summary
 
-Arch3DAR é uma plataforma mínima de compartilhamento 3D/AR para arquitetura (não BIM): upload de IFC ou SKP, conversão no sidecar Python único, persistência local em `/data/projects/{projectId}/`, entrega direta de assets (sem redirect), viewer web com `@google/model-viewer` e AR nativo (Scene Viewer + Quick Look).
+Arch3DAR é uma plataforma mínima de compartilhamento 3D/AR para arquitetura (não BIM): upload de IFC ou export Collada/OBJ do SketchUp, conversão no sidecar Python único, persistência local em `/data/projects/{projectId}/`, entrega direta de assets (sem redirect), viewer web com `@google/model-viewer` e AR nativo (Scene Viewer + Quick Look).
 
 **Pipelines**:
 
@@ -14,7 +14,10 @@ Arch3DAR é uma plataforma mínima de compartilhamento 3D/AR para arquitetura (n
 IFC:  original.ifc → IfcConvert → glb_normalize → usd_from_gltf → model.usdz
                                     └→ Blender render → thumbnail.webp
 
-SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → usd_from_gltf → model.usdz
+DAE:  original.dae → Blender (import Collada + export GLB) → glb_normalize → usd_from_gltf → model.usdz
+                                    └→ Blender render → thumbnail.webp
+
+OBJ:  original.obj → Blender (import Wavefront + export GLB) → glb_normalize → usd_from_gltf → model.usdz
                                     └→ Blender render → thumbnail.webp
 ```
 
@@ -27,13 +30,13 @@ SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → u
 **Primary Dependencies**:
 - Backend: EF Core 9 + Npgsql, Serilog, QRCoder, `LocalFileStorage`, `HttpModelConverter`, `ModelContentTypeMiddleware`.
 - Frontend: `@google/model-viewer@3.3`, `react-router-dom@6`.
-- Converter: IfcOpenShell `IfcConvert`, **Blender 4.2** (SKP→GLB + thumbnail WebP), **`usd_from_gltf`**, `glb_normalize.py`, FastAPI/uvicorn.
+- Converter: IfcOpenShell `IfcConvert`, **Blender 4.2** (DAE/OBJ→GLB + thumbnail WebP), **`usd_from_gltf`**, `glb_normalize.py`, FastAPI/uvicorn.
 - Infra: nginx (TLS + reverse proxy), Docker Compose.
 
 **Storage**:
 ```
 /data/projects/{projectId}/
-  original.ifc | original.skp
+  original.ifc | original.dae | original.obj
   model.glb
   model.usdz
   thumbnail.webp
@@ -42,9 +45,9 @@ SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → u
 - Volume Docker `project_data:/data` compartilhado entre `backend` e `converter`.
 
 **Testing**:
-- Backend integration: upload IFC + SKP → artefatos no disco → GET `/files/...` 200, Content-Type correto, sem redirect.
-- Converter unit: `glb_normalize`, `usd_converter`, `skp_to_glb` (fixture SKP pequeno).
-- Frontend: Vitest — `ios-src`, poster WebP, admin boundary.
+- Backend integration: upload IFC + DAE → artefatos no disco → GET `/files/...` 200, Content-Type correto, sem redirect; `.skp` rejeitado com mensagem Collada.
+- Converter unit: `glb_normalize`, `usd_converter`, `mesh_to_glb.py` (fixture DAE/OBJ pequeno).
+- Frontend: Vitest — `ios-src`, poster WebP, upload `accept`, SketchUp instructions, admin boundary.
 - Manual: quickstart §6 — AR Android + iPhone.
 
 **Target Platform**: Linux amd64 (Docker). Clientes: Safari iOS 15+, Chrome Android 10+ (ARCore). Quick Look exige HTTPS válido.
@@ -55,16 +58,17 @@ SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → u
 - Upload + conversão: ≤ 5 min para arquivo ~50 MB (SC-001).
 - GET `/files/...` p95 < 50 ms.
 - Página pública: thumbnail + GLB < 10 s em 4G (SC-003).
-- SKP via Blender: timeout estendido aceitável até 180 s (env `SKP_CONVERSION_TIMEOUT_S`).
+- DAE/OBJ via Blender: timeout até 180 s (`MESH_CONVERSION_TIMEOUT_S`).
 
 **Constraints**:
-- Max upload 100 MB (`MAX_UPLOAD_MB`) — IFC e SKP.
-- Timeout IFC: 120 s (`IFC_CONVERSION_TIMEOUT_S`); SKP: 180 s (`SKP_CONVERSION_TIMEOUT_S`).
+- Max upload 100 MB (`MAX_UPLOAD_MB`) — IFC, DAE, OBJ.
+- Timeout IFC: 120 s (`IFC_CONVERSION_TIMEOUT_S`); DAE/OBJ: 180 s (`MESH_CONVERSION_TIMEOUT_S`).
+- **`.skp` upload proibido** — rejeitar client (`accept`) + server com instruções SketchUp export.
 - Sem redirects em URLs de assets (Quick Look).
 - Content-Type: `model/gltf-binary`, `model/vnd.usdz+zip`, `image/webp`.
 - USDZ obrigatório — falha = projeto `Failed`.
 - HTTPS obrigatório para AR.
-- Open source only — sem Forge/APS.
+- Open source only — sem Forge/APS, sem addon SketchUp pago, sem ODA.
 
 **Scale/Scope**:
 - Conversão síncrona no upload (sem fila distribuída).
@@ -76,9 +80,9 @@ SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → u
 
 | Principle | Status | Evidence |
 |---|---|---|
-| **I. Clean Code & MVP Pragmatism** | ✅ Pass | Sidecar único evita microserviços por formato. Auth/dashboard removidos. Blender só entra onde SKP exige. |
-| **II. Meaningful Naming & Structure** | ✅ Pass | `SourceFormat`, `SkpConverter`, `IfcConverter`, paths espelham disco. |
-| **III. Small Units & Single Responsibility** | ✅ Pass | `LocalFileStorage`, `UsdConverter`, `SkpToGlbScript`, `ThumbnailRenderer` separados no converter. |
+| **I. Clean Code & MVP Pragmatism** | ✅ Pass | Sidecar único; sem addon SKP frágil; DAE nativo no Blender; auth/dashboard removidos. |
+| **II. Meaningful Naming & Structure** | ✅ Pass | `SourceFormat`, `DaeConverter`, `ObjConverter`, `mesh_to_glb.py`, paths espelham disco. |
+| **III. Small Units & Single Responsibility** | ✅ Pass | `LocalFileStorage`, `UsdConverter`, `MeshToGlbScript`, `ThumbnailRenderer` separados no converter. |
 | **IV. Tests Mirror Structure** | ✅ Pass | `app/tests/backend/Integration/`, `app/converter/test_*.py`, `app/frontend/src/__tests__/`. |
 | **V. Self-Documenting Code & Minimal Comments** | ✅ Pass | Comentários só em MIME middleware e scripts Blender headless. |
 
@@ -93,11 +97,11 @@ SKP:  original.skp → Blender (import SKP + export GLB) → glb_normalize → u
 ```text
 specs/001-ifc-mvp-platform/
 ├── plan.md              # This file
-├── research.md          # R-11…R-20 (storage, USDZ, SKP, Blender, WebP)
+├── research.md          # R-11…R-21 (storage, USDZ, DAE/OBJ, Blender, WebP)
 ├── data-model.md        # Project + filesystem layout
 ├── contracts/
 │   └── openapi.md       # HTTP + converter sidecar
-├── quickstart.md        # E2E IFC + SKP + AR checklist
+├── quickstart.md        # E2E IFC + DAE + AR checklist
 └── spec.md
 ```
 
@@ -107,8 +111,8 @@ specs/001-ifc-mvp-platform/
 app/
 ├── backend/
 │   ├── Domain/
-│   │   ├── Project.cs              # + SourceFormat (Ifc|Skp)
-│   │   └── ProjectStatus.cs
+│   │   ├── Project.cs              # SourceFormat (Ifc|Dae|Obj)
+│   │   └── SourceFormat.cs
 │   ├── Infrastructure/
 │   │   ├── LocalFileStorage.cs
 │   │   ├── ModelContentTypeMiddleware.cs   # + image/webp
@@ -118,24 +122,24 @@ app/
 │   ├── Services/
 │   │   ├── IFileStorageService.cs
 │   │   ├── IModelConversionService.cs      # abstraction FR-010
-│   │   ├── IThumbnailService.cs            # contract (implemented in converter)
 │   │   └── IPublicLinkService.cs
 │   └── Program.cs
 │
 ├── converter/
 │   ├── converter_service.py        # routes by format
 │   ├── ifc_pipeline.py             # IfcConvert path
-│   ├── skp_to_glb.py               # Blender headless script
+│   ├── mesh_to_glb.py              # Blender: DAE/OBJ → GLB (replaces skp_to_glb.py)
+│   ├── mesh_pipeline.py            # DAE/OBJ orchestration (replaces skp_pipeline.py)
 │   ├── render_thumbnail.py         # Blender → thumbnail.webp
 │   ├── glb_normalize.py
 │   ├── usd_converter.py
 │   ├── requirements.txt
-│   └── Dockerfile                  # + Blender 4.2 LTS
+│   └── Dockerfile                  # Blender 4.2 LTS (stock — no SKP addon)
 │
 ├── frontend/
 │   └── src/
 │       ├── pages/
-│       │   ├── HomePage.tsx        # upload .ifc | .skp
+│       │   ├── HomePage.tsx        # upload .ifc | .dae | .obj + SketchUp guide
 │       │   └── SharePage.tsx       # model-viewer + AR
 │       └── components/
 │           └── ModelViewer.tsx
@@ -182,9 +186,9 @@ flowchart LR
   subgraph IFC
     I1[IfcConvert]
   end
-  subgraph SKP
-    S1[Blender SKP import]
-    S2[Blender GLB export]
+  subgraph Mesh
+    M1[Blender Collada/OBJ import]
+    M2[Blender GLB export]
   end
   subgraph Common
     N[glb_normalize]
@@ -193,7 +197,7 @@ flowchart LR
   end
   U --> D
   D -->|ifc| I1 --> N
-  D -->|skp| S1 --> S2 --> N
+  D -->|dae or obj| M1 --> M2 --> N
   N --> Z
   N --> T
 ```
@@ -204,51 +208,52 @@ flowchart LR
 |---|---|
 | `IFileStorageService` | CRUD paths under `/data/projects/{id}/` |
 | `IModelConversionService` | Detect format, invoke converter sidecar, update status |
-| `IThumbnailService` | Contract for thumbnail generation (delegated to converter) |
 | `IPublicLinkService` | Generate token, share URL, QR SVG |
 
 ## Implementation Phases
 
-### Phase A — IFC correction (in progress)
+### Phase A — IFC correction (verified)
 
-Completar correção Quick Look iPhone + storage local (ver Migration below). Garantir IFC E2E antes de SKP.
+IFC E2E com Quick Look iPhone + storage local. Baseline de produção.
 
-### Phase B — SKP support
+### Phase B — DAE/OBJ support (SketchUp workflow)
 
-1. Adicionar Blender 4.2 LTS ao Dockerfile do converter.
-2. Implementar `skp_to_glb.py` (Blender batch: import SKP → export glTF binary).
-3. Estender `POST /convert` com campo `sourceFormat` (`ifc`|`skp`).
-4. Backend: validação magic bytes SKP, `SourceFormat` column, aceitar `.skp` no upload UI.
-5. Testes: fixture SKP mínimo + integration upload SKP.
+1. **Remover** `skp_to_glb.py` / pipeline SKP (`io_sketchup`, `import_scene.skp`).
+2. Implementar `mesh_to_glb.py` (Blender batch: `import_scene.dae` / `import_scene.obj` → export glTF binary).
+3. Estender `POST /convert` com `sourceFormat` (`ifc`|`dae`|`obj`).
+4. Backend: `SourceFormat` enum; validação magic bytes DAE/OBJ; rejeitar `.skp` com mensagem Collada; upload UI `accept=".ifc,.dae,.obj"`.
+5. Frontend: instruções SketchUp export prominentes (FR-001a).
+6. Testes: fixture DAE exportada do SketchUp + integration upload DAE; teste rejeição `.skp`.
 
-### Phase C — Thumbnail WebP
+### Phase C — Thumbnail WebP (in progress)
 
-1. Substituir Pillow/IfcConvert thumbnail por `render_thumbnail.py` (Blender headless).
-2. Migrar endpoints e middleware para `thumbnail.webp` / `image/webp`.
+1. `render_thumbnail.py` (Blender headless) para todos os formatos.
+2. `thumbnail.webp` / `image/webp` em middleware e frontend poster.
 3. Atualizar testes e quickstart.
 
 ## Complexity Tracking
 
-Nenhuma violação da constituição. Blender no sidecar é justificado pela clarificação SpecDrive (SKP→GLB direto + thumbnail único).
+Nenhuma violação da constituição. Blender no sidecar justificado por: (1) DAE/OBJ→GLB com materiais, (2) thumbnail WebP unificado. **Não** instalar addon SketchUp — stock Blender 4.2 já importa Collada/OBJ.
 
 ## Migration from current state (ordered)
 
-1. **IFC correction** (em andamento): local storage, `usd_from_gltf`, `glb_normalize`, sem MinIO, `ios-src`.
-2. **Backend**: `SourceFormat` enum; upload aceita `.skp`; validação signature; `MAX_UPLOAD_MB`.
-3. **Converter Dockerfile**: instalar Blender 4.2 LTS + dependências SKP (libGL, Xvfb opcional).
-4. **Converter code**: `ifc_pipeline.py`, `skp_to_glb.py`, `render_thumbnail.py`; router em `converter_service.py`.
-5. **Thumbnail migration**: `thumbnail.png` → `thumbnail.webp` em paths, middleware, frontend poster.
-6. **Frontend**: file input `accept=".ifc,.skp"`; mensagens de erro por formato.
-7. **Tests + quickstart**: cenários SKP; AR checklist para ambos formatos.
+1. **IFC correction** ✅: local storage, `usd_from_gltf`, `glb_normalize`, sem MinIO, `ios-src`.
+2. **Spec alignment** (this plan): DAE/OBJ substituem SKP em spec, plan, contracts, data-model.
+3. **Backend**: `SourceFormat` → `Ifc|Dae|Obj`; remover `Skp`; validação DAE (XML `COLLADA`) e OBJ (`#`/`v `); rejeição `.skp` dedicada.
+4. **Converter**: substituir `skp_pipeline.py`/`skp_to_glb.py` por `mesh_pipeline.py`/`mesh_to_glb.py`; renomear `SKP_CONVERSION_TIMEOUT_S` → `MESH_CONVERSION_TIMEOUT_S`.
+5. **Frontend**: `accept=".ifc,.dae,.obj"`; bloco SketchUp export guide; remover referências `.skp`.
+6. **Tests + quickstart**: cenários DAE/OBJ; rejeição SKP; AR checklist para IFC + DAE.
+7. **Cleanup**: deletar código morto `io_sketchup`; atualizar `SkpUploadConversionTests` → `DaeUploadConversionTests`.
 
 ## Acceptance Criteria
 
-1. Upload `.ifc` ou `.skp` via `POST /upload` ou HomePage.
-2. Artefatos em `/data/projects/{id}/`: original, `model.glb`, `model.usdz`, `thumbnail.webp`.
-3. Share URL + QR gerados automaticamente ao `Ready`.
-4. Viewer web: orbit, zoom, fullscreen, auto-rotate, poster WebP.
-5. Android AR (Scene Viewer) funciona.
-6. iPhone AR (Quick Look via USDZ) funciona sem "Object could not be opened".
-7. SKP com materiais/texturas: cores reconhecíveis no viewer (SC-009, best-effort).
-8. Zero MinIO; assets servidos diretamente (200, Content-Type correto, sem redirect).
-9. `docker compose up` sobe stack completa com Blender + IfcOpenShell.
+1. Upload `.ifc`, `.dae`, ou `.obj` via `POST /upload` ou HomePage.
+2. Upload `.skp` rejeitado (client `accept` + server 415 com instruções Collada).
+3. Artefatos em `/data/projects/{id}/`: original, `model.glb`, `model.usdz`, `thumbnail.webp`.
+4. Share URL + QR gerados automaticamente ao `Ready`.
+5. Viewer web: orbit, zoom, fullscreen, auto-rotate, poster WebP.
+6. Android AR (Scene Viewer) funciona.
+7. iPhone AR (Quick Look via USDZ) funciona sem "Object could not be opened".
+8. DAE/OBJ do SketchUp: cores/texturas reconhecíveis no viewer (SC-009, best-effort).
+9. Zero MinIO; assets servidos diretamente (200, Content-Type correto, sem redirect).
+10. `docker compose up` sobe stack completa com Blender + IfcOpenShell — **sem** addon SKP.

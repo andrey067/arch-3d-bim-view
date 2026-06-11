@@ -1,11 +1,11 @@
-# Research: Arch3DAR — IFC/SKP → Web 3D + AR MVP
+# Research: Arch3DAR — IFC/SketchUp → Web 3D + AR MVP
 
 **Phase**: 0
 **Branch**: `main`
 **Date**: 2026-06-10
 **Plan**: `specs/001-ifc-mvp-platform/plan.md`
 
-> Decisões técnicas para MVP simplificado: IFC + SKP, storage local, USDZ Quick Look, Blender headless, thumbnail WebP. R-11…R-17 da correção permanecem válidos onde não conflitam; R-18+ estendem escopo SpecDrive.
+> Decisões técnicas para MVP simplificado: IFC + DAE/OBJ (fluxo SketchUp), storage local, USDZ Quick Look, Blender headless, thumbnail WebP. R-11…R-17 da correção permanecem válidos onde não conflitam; R-19 **supersedido** por R-21 (clarificação 2026-06-10).
 
 ---
 
@@ -225,35 +225,51 @@
 
 ---
 
-## R-19. SKP → GLB (Blender headless)
+## R-19. SKP → GLB (Blender headless) — **SUPERSEDED**
+
+> **Status**: Obsoleto (2026-06-10). Blender 4.2.3 stock **não inclui** `io_sketchup` nem `bpy.ops.import_scene.skp`. O Dockerfile não instala addon. Ver **R-21**.
+
+---
+
+## R-21. SketchUp workflow: DAE/OBJ upload → GLB (Blender headless)
 
 **Decision**
-- Pipeline primário (clarificação SpecDrive): **Blender 4.2 LTS headless**, import SKP nativo + export glTF 2.0 binary (GLB).
-- Script `skp_to_glb.py` invocado via:
+- Pipeline primário (clarificação 2026-06-10): usuários SketchUp exportam **Collada (`.dae`, primário)** ou **Wavefront (`.obj`)**; upload direto de `.skp` **proibido**.
+- Script `mesh_to_glb.py` invocado via:
   ```bash
-  blender -b --python skp_to_glb.py -- \
-    --input /data/projects/{id}/original.skp \
-    --output /data/projects/{id}/model.glb
+  blender -b --python mesh_to_glb.py -- \
+    --input /data/projects/{id}/original.dae \
+    --output /data/projects/{id}/model.glb \
+    --format dae
   ```
+  (ou `--format obj` para `original.obj`)
+- Blender operators: `bpy.ops.import_scene.dae` / `bpy.ops.import_scene.obj` — **nativos** no Blender 4.2, sem addon.
 - Após export GLB, pipeline comum: `glb_normalize` → `usd_from_gltf` → thumbnail.
-- Validação upload SKP: extensão `.skp` + magic bytes `PK\x03\x04` (SKP é ZIP internamente) + presença de `SketchUp/` ou `model.skp` no zip (best-effort).
-- Timeout dedicado: `SKP_CONVERSION_TIMEOUT_S=180` (Blender startup + import mais lento que IfcConvert).
+- Validação upload:
+  | Format | Extension | Signature |
+  |---|---|---|
+  | DAE | `.dae` | XML com root `<COLLADA` ou `<?xml` + `COLLADA` namespace |
+  | OBJ | `.obj` | Texto com linhas `v ` / `f ` (best-effort) |
+  | SKP | `.skp` | **Rejeitar 415** com mensagem: exportar Collada do SketchUp |
+- Timeout dedicado: `MESH_CONVERSION_TIMEOUT_S=180` (renomear de `SKP_CONVERSION_TIMEOUT_S`).
+- Upload UI: `accept=".ifc,.dae,.obj"` + instruções SketchUp export (FR-001a).
 
 **Rationale**
-- Blender preserva materiais, texturas e UV mapping melhor que Assimp para SKP.
-- Mesmo runtime Blender serve thumbnail (R-20) — um binário no sidecar.
-- Clarificação do usuário rejeitou DAE intermediário e Assimp como path primário.
+- Produção validada: Collada import funciona no container atual sem dependências extras.
+- Materiais/texturas SketchUp preservados razoavelmente via export DAE (melhor que Assimp SKP).
+- Evita addons pagos/instáveis (`SketchUp Importer`) e pipeline ODA (não open source).
+- Mesmo runtime Blender serve thumbnail (R-20).
 
 **Alternatives considered**
-- **SKP → DAE → GLB**: rejeitado — passo extra, perda de materiais.
-- **Assimp CLI**: rejeitado — SKP support limitado, materiais degradados.
-- **Blender + Assimp fallback**: adiado — YAGNI; adicionar só se import SKP falhar em produção.
-- **Trimble SDK standalone**: rejeitado — Blender já encapsula import.
+- **Blender native SKP import (`io_sketchup`)**: rejeitado — **não existe** no Blender oficial 4.2.3 linux-x64; falha com "SKP import operator unavailable".
+- **Third-party SketchUp Importer addon**: rejeitado — manutenção frágil, alguns pagos, quebra entre versões Blender.
+- **ODA SKP → DAE**: rejeitado — deixa de ser totalmente open source.
+- **Assimp CLI para SKP**: rejeitado — suporte SKP limitado, materiais degradados.
 
 **Linux Docker note**
-- Instalar Blender 4.2 tarball oficial (amd64) no Dockerfile; dependências: `libgl1`, `libx11-6`, `libxi6`, `libxxf86vm1`.
-- SketchUp Importer add-on vem bundled no Blender; habilitar em script se necessário (`import addon_utils; addon_utils.enable("io_sketchup")`).
-- Validar na Phase B com fixture SKP real exportado do SketchUp 2023+.
+- Blender 4.2 tarball oficial (amd64) no Dockerfile — **sem** instalação de addon SKP.
+- Dependências: `libgl1`, `libglib2.0-0`, `libxi6`, `libxxf86vm1` (já presentes).
+- Fixture de teste: `.dae` exportado do SketchUp 2023+ (não `.skp`).
 
 ---
 
@@ -275,20 +291,20 @@
 **Rationale**
 - WebP ~30% menor que PNG — melhora SC-003 (4G, poster first).
 - Blender render produz preview visualmente alinhado ao modelo 3D (materiais), superior a placeholder IfcConvert.
-- Unifica pipeline IFC e SKP no mesmo gerador de thumbnail.
+- Unifica pipeline IFC e DAE/OBJ no mesmo gerador de thumbnail.
 
 **Alternatives considered**
-- **Pillow placeholder**: rejeitado como destino final — não reflete materiais SKP.
+- **Pillow placeholder**: rejeitado como destino final — não reflete materiais DAE/OBJ.
 - **PNG + nginx content negotiation**: rejeitado — clarificação fixou WebP.
 - **glTF screenshot via headless Chrome**: rejeitado — complexidade desnecessária.
 
 ---
 
-## Cross-cutting summary (IFC/SKP MVP)
+## Cross-cutting summary (IFC/SketchUp MVP)
 
 | Concern | Choice |
 |---|---|
-| Input formats | **`.ifc`** (IfcConvert) + **`.skp`** (Blender) |
+| Input formats | **`.ifc`** (IfcConvert) + **`.dae`/`.obj`** (Blender Collada/OBJ); **`.skp` rejeitado** |
 | Object storage | **Local filesystem** `/data/projects/{id}/` |
 | GLB delivery | Backend `Results.File`, same-origin, GET+HEAD |
 | GLB normalization | **`glb_normalize`** bake matrices + tabletop scale (`AR_MAX_EXTENT_M`) |

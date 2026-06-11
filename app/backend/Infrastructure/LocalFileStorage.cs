@@ -10,13 +10,18 @@ public sealed class LocalFileStorageSettings
 public sealed class LocalFileStorage
 {
     public const string IfcFileName = "original.ifc";
-    public const string SkpFileName = "original.skp";
+    public const string DaeFileName = "original.dae";
+    public const string ObjFileName = "original.obj";
     public const string GlbFileName = "model.glb";
     public const string UsdzFileName = "model.usdz";
     public const string ThumbnailFileName = "thumbnail.webp";
 
-    public static string OriginalFileName(SourceFormat format) =>
-        format == SourceFormat.Skp ? SkpFileName : IfcFileName;
+    public static string OriginalFileName(SourceFormat format) => format switch
+    {
+        SourceFormat.Dae => DaeFileName,
+        SourceFormat.Obj => ObjFileName,
+        _ => IfcFileName,
+    };
 
     private readonly string _dataRoot;
 
