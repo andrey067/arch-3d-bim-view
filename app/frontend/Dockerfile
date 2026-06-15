@@ -1,13 +1,23 @@
-FROM node:20-alpine AS build
+# Arch3DAR Frontend — SPA served by nginx with API proxy
+FROM node:20-slim AS build
+
 WORKDIR /app
-COPY package.json package-lock.json* ./
-RUN npm install --legacy-peer-deps
+COPY package.json package-lock.json ./
+RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM nginx:alpine
+FROM nginx:alpine AS runtime
+
+# Remove default config
+RUN rm /etc/nginx/conf.d/default.conf
+
+# Custom nginx config with API proxy
+COPY nginx.conf /etc/nginx/conf.d/default.conf
+
+# Copy built SPA
 COPY --from=build /app/dist /usr/share/nginx/html
-COPY nginx-https.conf /etc/nginx/conf.d/default.conf
-COPY 192.168.68.51.pem 192.168.68.51-key.pem /etc/nginx/certs/
-EXPOSE 3000 443
+
+EXPOSE 8080
+
 CMD ["nginx", "-g", "daemon off;"]

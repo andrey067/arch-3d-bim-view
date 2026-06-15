@@ -48,3 +48,18 @@ storage/thumbnails/*
 *.key
 *.crt
 infra/docker/homelab/certs/
+
+# Python caches
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+*.egg-info/
+
+# Backend runtime storage (SQLite + converted artifacts)
+app/backend/storage/
+
+# Large local test assets (CADEIRA.*, Project1.*)
+files/
+
+# TS build info
+*.tsbuildinfo

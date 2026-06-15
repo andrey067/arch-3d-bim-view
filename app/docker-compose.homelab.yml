@@ -1,4 +1,0 @@
-services:
-  frontend:
-    ports:
-      - "3100:3000"

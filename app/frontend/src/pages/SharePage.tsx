@@ -1,87 +1,137 @@
-import { useEffect, useState } from 'react';
+/**
+ * Sprint 5 — Public share page.
+ *
+ * Displays a 3D model using <model-viewer> for anonymous clients.
+ * No authentication required. Token is the credential.
+ *
+ * Route: /s/:token
+ */
 import { useParams } from 'react-router-dom';
-import axios from 'axios';
-import ModelViewer from '../components/ModelViewer';
-import { api, type PublicShareDto, type ProjectStatus } from '../api/client';
-import { useArCapability } from '../auth/useArCapability';
+import { useShareManifest } from '@/features/sharing/useShareManifest';
+import { ModelViewer } from '@/shared/components/ModelViewer';
+import { Button, Card, Spinner } from '@/shared/components';
 
-type State =
-  | { kind: 'loading' }
-  | { kind: 'not-found' }
-  | { kind: 'ready'; data: PublicShareDto };
+export const SharePage = () => {
+  const { token } = useParams<{ token: string }>();
+  const { data: manifest, isLoading, error } = useShareManifest(token!);
 
-export default function SharePage() {
-  const { token = '' } = useParams<{ token: string }>();
-  const [state, setState] = useState<State>({ kind: 'loading' });
-  const arCapable = useArCapability();
-  const isHttps = typeof window !== 'undefined' && window.location.protocol === 'https:';
+  // Update page title and meta tags dynamically
+  if (manifest) {
+    document.title = `${manifest.filename} — Visualizacao 3D`;
 
-  useEffect(() => {
-    let cancelled = false;
-    setState({ kind: 'loading' });
-    api
-      .getPublicShare(token)
-      .then((data) => {
-        if (!cancelled) setState({ kind: 'ready', data });
-      })
-      .catch((err) => {
-        if (cancelled) return;
-        if (axios.isAxiosError(err) && err.response?.status === 404) {
-          setState({ kind: 'not-found' });
-        } else {
-          setState({ kind: 'not-found' });
-        }
-      });
-    return () => {
-      cancelled = true;
+    // Inject OG meta tags for link previews
+    const setMeta = (property: string, content: string) => {
+      let meta = document.querySelector(`meta[property="${property}"]`);
+      if (!meta) {
+        meta = document.createElement('meta');
+        meta.setAttribute('property', property);
+        document.head.appendChild(meta);
+      }
+      meta.setAttribute('content', content);
     };
-  }, [token]);
 
-  if (state.kind === 'loading') {
-    return <div className="loading">Loading...</div>;
+    setMeta('og:title', `${manifest.filename} — Visualizacao 3D`);
+    setMeta('og:type', 'website');
   }
-  if (state.kind === 'not-found') {
+
+  if (isLoading) {
     return (
-      <div className="empty-state">
-        <h1>We couldn&apos;t find that project</h1>
-        <p>The link may be invalid or the project may not be published yet.</p>
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          gap: 'var(--space-4)',
+          background: 'var(--color-bg)',
+        }}
+      >
+        <Spinner size={48} />
+        <p style={{ margin: 0, color: 'var(--color-text-muted)' }}>
+          Carregando modelo...
+        </p>
       </div>
     );
   }
 
-  const { data } = state;
-  const status = data.status as ProjectStatus;
-  const isPublished = status === 'Published';
+  if (error || !manifest) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          height: '100vh',
+          padding: 'var(--space-6)',
+          background: 'var(--color-bg)',
+        }}
+      >
+        <Card style={{ maxWidth: 400, textAlign: 'center' }}>
+          <p style={{ margin: 0, color: 'var(--color-danger)', fontWeight: 500, fontSize: 'var(--font-size-lg)' }}>
+            Link invalido ou expirado
+          </p>
+          <p style={{ margin: 'var(--space-2) 0 0', color: 'var(--color-text-muted)' }}>
+            Este link de compartilhamento nao e valido ou foi revogado.
+          </p>
+          <Button
+            variant="primary"
+            onClick={() => (window.location.href = '/')}
+            style={{ marginTop: 'var(--space-4)' }}
+          >
+            Voltar ao inicio
+          </Button>
+        </Card>
+      </div>
+    );
+  }
 
   return (
-    <div className="share-page">
-      <header className="share-header">
-        <h1>{data.name}</h1>
-        {data.clientLabel && <p className="muted">for {data.clientLabel}</p>}
+    <div
+      style={{
+        display: 'flex',
+        flexDirection: 'column',
+        height: '100vh',
+        background: 'var(--color-bg)',
+      }}
+    >
+      {/* Header */}
+      <header
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: 'var(--space-3) var(--space-4)',
+          background: 'var(--color-surface)',
+          borderBottom: '1px solid var(--color-border)',
+          boxShadow: 'var(--shadow-sm)',
+        }}
+      >
+        <div>
+          <h1 style={{ margin: 0, fontSize: 'var(--font-size-lg)', fontWeight: 600 }}>
+            {manifest.filename}
+          </h1>
+          <p style={{ margin: 0, fontSize: 'var(--font-size-sm)', color: 'var(--color-text-muted)' }}>
+            {manifest.sourceFormat.toUpperCase()} &middot; Visualizacao publica
+          </p>
+        </div>
+        <p style={{ margin: 0, fontSize: 'var(--font-size-xs)', color: 'var(--color-text-muted)' }}>
+          App 3D Viewer
+        </p>
       </header>
 
-      {!isPublished && (
-        <div className="empty-state">
-          <p>This project is not available for viewing yet (status: {status}).</p>
-        </div>
-      )}
-
-      {isPublished && (
-        <>
-          <div className="viewer-wrap" data-testid="viewer">
-            <ModelViewer
-              glbUrl={data.glbUrl}
-              thumbnailUrl={data.thumbnailUrl}
-              alt={data.name}
-            />
-          </div>
-          {arCapable && !isHttps && (
-            <div className="banner" role="status">
-              AR requires HTTPS. Use a secure URL to launch AR.
-            </div>
-          )}
-        </>
-      )}
+      {/* Viewer */}
+      <main style={{ flex: 1, overflow: 'hidden' }}>
+        <ModelViewer
+          src={manifest.glbUrl}
+          iosSrc={manifest.usdzUrl ?? undefined}
+          alt={`3D model: ${manifest.filename}`}
+          autoRotate={true}
+          arEnabled={true}
+          style={{ width: '100%', height: '100%' }}
+        />
+      </main>
     </div>
   );
-}
+};

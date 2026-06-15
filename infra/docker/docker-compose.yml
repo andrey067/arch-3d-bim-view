@@ -1,97 +1,42 @@
-# App 3D Viewer — Docker Compose (local development)
+# Arch3DAR — Docker Compose (local dev)
+#
+# Stack: SQLite + FastAPI BackgroundTasks + trimesh/IfcConvert
 #
 # Usage:
 #   docker compose up -d          # start all services
 #   docker compose logs -f        # follow logs
 #   docker compose down -v        # stop and remove volumes
 #
-# Services: postgres, redis, backend, worker, frontend
+# Services: backend, frontend
 
 services:
-  postgres:
-    build: ./postgres
-    # Port not exposed externally - only used by backend and worker
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: app3d
-      POSTGRES_USER: app3d
-      POSTGRES_PASSWORD: app3d
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U app3d -d app3d"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  redis:
-    build: ./redis
-    # Port not exposed externally - only used by backend and worker
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
   backend:
     build:
-      context: ../../apps/backend
-      dockerfile: ../../infra/docker/backend/Dockerfile
+      context: ../..
+      dockerfile: app/backend/Dockerfile
     ports:
       - "8000:8000"
     volumes:
-      - ../storage:/app/storage
+      - backend_data:/app/storage
     environment:
       APP_ENV: dev
       LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+psycopg://app3d:app3d@postgres:5432/app3d
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      STORAGE_BACKEND: local
+      DATABASE_URL: sqlite:////app/storage/app.db
       STORAGE_ROOT: /app/storage
-      JWT_SECRET: dev-only-change-me-in-prod
-      JWT_ALG: HS256
       CORS_ORIGINS: http://localhost:5173,http://localhost:8080
       PUBLIC_BASE_URL: http://localhost:8000
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      IFCCONVERT_PATH: /usr/local/bin/IfcConvert
+      USD_FROM_GLTF_PATH: usd_from_gltf
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
       timeout: 5s
       retries: 3
 
-  worker:
-    build:
-      context: ../../apps/backend
-      dockerfile: ../../infra/docker/worker/Dockerfile
-    volumes:
-      - ../storage:/app/storage
-    environment:
-      APP_ENV: dev
-      LOG_LEVEL: INFO
-      DATABASE_URL: postgresql+psycopg://app3d:app3d@postgres:5432/app3d
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      STORAGE_BACKEND: local
-      STORAGE_ROOT: /app/storage
-      JWT_SECRET: dev-only-change-me-in-prod
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
   frontend:
     build:
-      context: ../../apps/frontend
-      dockerfile: ../../infra/docker/frontend/Dockerfile
+      context: ../..
+      dockerfile: app/frontend/Dockerfile
     ports:
       - "8080:8080"
     depends_on:
@@ -99,5 +44,4 @@ services:
         condition: service_healthy
 
 volumes:
-  pg_data:
-  redis_data:
+  backend_data:

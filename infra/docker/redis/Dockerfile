@@ -1,8 +1,0 @@
-FROM redis:7-alpine
-
-# AOF enabled for durability; noeviction so queue jobs aren't lost
-COPY redis.conf /usr/local/etc/redis/redis.conf
-
-EXPOSE 6379
-
-CMD ["redis-server", "/usr/local/etc/redis/redis.conf"]

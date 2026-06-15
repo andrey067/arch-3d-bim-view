@@ -1,8 +1,10 @@
-# App 3D Viewer — Homelab Production (HTTPS via Traefik)
+# Arch3DAR — Homelab Production (HTTPS via Traefik)
+#
+# Stack: SQLite + FastAPI BackgroundTasks + trimesh/IfcConvert
+# No PostgreSQL, Redis, Celery worker, or auth.
 #
 # Prerequisites:
 #   1. Run ./generate-certs.sh to create self-signed TLS certificates
-#   2. Copy .env.example → .env and set strong passwords/secrets
 #
 # Usage:
 #   docker --context homelab compose up -d --build
@@ -17,7 +19,9 @@ x-common-build: &common-build
 services:
   # ── Reverse Proxy ──────────────────────────────────────────────
   traefik:
-    image: traefik:v3.3
+    build:
+      context: /Volumes/Arquivos/Projetos em andamento/Arch3DAR/infra/docker/homelab
+      dockerfile: traefik.Dockerfile
     container_name: arch3d-traefik
     restart: unless-stopped
     security_opt:
@@ -28,72 +32,27 @@ services:
       - "80:80"
       - "443:443"
     command:
-      # EntryPoints
       - "--entrypoints.web.address=:80"
       - "--entrypoints.web.http.redirections.entrypoint.to=websecure"
       - "--entrypoints.web.http.redirections.entrypoint.scheme=https"
       - "--entrypoints.web.http.redirections.entrypoint.permanent=true"
       - "--entrypoints.websecure.address=:443"
       - "--entrypoints.websecure.http.tls=true"
-      # TLS — self-signed certificate
       - "--providers.file.filename=/dynamic/tls.yaml"
-      # Docker provider
       - "--providers.docker=true"
       - "--providers.docker.exposedbydefault=false"
       - "--providers.docker.network=arch3d_proxy"
-      # Dashboard disabled
       - "--api.dashboard=false"
       - "--api.insecure=false"
-      # Logging
       - "--log.level=WARN"
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      - ./traefik/dynamic:/dynamic:ro
-      - ./certs:/certs:ro
 
-  # ── Database ───────────────────────────────────────────────────
-  postgres:
-    build:
-      <<: *common-build
-      dockerfile: infra/docker/postgres/Dockerfile.project
-    container_name: arch3d-postgres
-    restart: unless-stopped
-    networks:
-      - internal
-    volumes:
-      - pg_data:/var/lib/postgresql/data
-    environment:
-      POSTGRES_DB: ${POSTGRES_DB:-app3d}
-      POSTGRES_USER: ${POSTGRES_USER:-app3d}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env}
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-app3d} -d ${POSTGRES_DB:-app3d}"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # ── Cache / Queue ─────────────────────────────────────────────
-  redis:
-    build:
-      <<: *common-build
-      dockerfile: infra/docker/redis/Dockerfile.project
-    container_name: arch3d-redis
-    restart: unless-stopped
-    networks:
-      - internal
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 5
-
-  # ── API Server ─────────────────────────────────────────────────
+  # ── API Server + Background Tasks ─────────────────────────────
   backend:
     build:
-      <<: *common-build
-      dockerfile: infra/docker/backend/Dockerfile.project
+      context: /Volumes/Arquivos/Projetos em andamento/Arch3DAR/app/backend
+      dockerfile: Dockerfile
     container_name: arch3d-backend
     restart: unless-stopped
     networks:
@@ -102,23 +61,14 @@ services:
     volumes:
       - storage_data:/app/storage
     environment:
-      APP_ENV: ${APP_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app3d}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-app3d}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      STORAGE_BACKEND: local
+      APP_ENV: prod
+      LOG_LEVEL: INFO
+      DATABASE_URL: sqlite:////app/storage/app.db
       STORAGE_ROOT: /app/storage
-      JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET in .env}
-      JWT_ALG: ${JWT_ALG:-HS256}
-      CORS_ORIGINS: ${CORS_ORIGINS:-https://192.168.68.51}
-      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://192.168.68.51}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      CORS_ORIGINS: https://192.168.68.51
+      PUBLIC_BASE_URL: https://192.168.68.51
+      IFCCONVERT_PATH: /usr/local/bin/IfcConvert
+      USD_FROM_GLTF_PATH: usd_from_gltf
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')"]
       interval: 10s
@@ -126,43 +76,17 @@ services:
       retries: 3
     labels:
       - "traefik.enable=true"
-      - "traefik.http.routers.backend.rule=Host(`${APP_IP:-192.168.68.51}`) && PathPrefix(`/api/v1/health`)"
+      # Backend API routes
+      - "traefik.http.routers.backend.rule=Host(`192.168.68.51`) && (PathPrefix(`/api`) || PathPrefix(`/static`))"
       - "traefik.http.routers.backend.entrypoints=websecure"
       - "traefik.http.routers.backend.tls=true"
       - "traefik.http.services.backend.loadbalancer.server.port=8000"
 
-  # ── Celery Worker ─────────────────────────────────────────────
-  worker:
-    build:
-      <<: *common-build
-      dockerfile: infra/docker/worker/Dockerfile.project
-    container_name: arch3d-worker
-    restart: unless-stopped
-    networks:
-      - internal
-    volumes:
-      - storage_data:/app/storage
-    environment:
-      APP_ENV: ${APP_ENV:-production}
-      LOG_LEVEL: ${LOG_LEVEL:-INFO}
-      DATABASE_URL: postgresql+psycopg://${POSTGRES_USER:-app3d}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB:-app3d}
-      REDIS_URL: redis://redis:6379/0
-      CELERY_BROKER_URL: redis://redis:6379/1
-      CELERY_RESULT_BACKEND: redis://redis:6379/2
-      STORAGE_BACKEND: local
-      STORAGE_ROOT: /app/storage
-      JWT_SECRET: ${JWT_SECRET}
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-
   # ── Frontend (SPA + API proxy) ────────────────────────────────
   frontend:
     build:
-      <<: *common-build
-      dockerfile: infra/docker/frontend/Dockerfile.project
+      context: /Volumes/Arquivos/Projetos em andamento/Arch3DAR/app/frontend
+      dockerfile: Dockerfile
     container_name: arch3d-frontend
     restart: unless-stopped
     networks:
@@ -172,8 +96,7 @@ services:
         condition: service_healthy
     labels:
       - "traefik.enable=true"
-      # Catch-all route — serves SPA, proxies /api + /s to backend via nginx
-      - "traefik.http.routers.frontend.rule=Host(`${APP_IP:-192.168.68.51}`)"
+      - "traefik.http.routers.frontend.rule=Host(`192.168.68.51`)"
       - "traefik.http.routers.frontend.entrypoints=websecure"
       - "traefik.http.routers.frontend.tls=true"
       - "traefik.http.services.frontend.loadbalancer.server.port=8080"
@@ -188,6 +111,4 @@ networks:
 
 # ── Volumes ──────────────────────────────────────────────────────
 volumes:
-  pg_data:
-  redis_data:
   storage_data:
